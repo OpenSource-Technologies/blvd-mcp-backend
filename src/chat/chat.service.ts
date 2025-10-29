@@ -31,13 +31,17 @@ export class ChatService {
     console.log('✅ Connected to MCP Server');
   }
 
-  async getResponse(userMessage: string, sessionId = 'default'): Promise<string> {
+  async getResponse(
+    userMessage: string,
+    sessionId = 'default'
+  ): Promise<{ reply: { role: string; content: string } }> {
+    // 🧩 Initialize conversation if new
     if (!this.conversationHistory[sessionId]) {
       this.conversationHistory[sessionId] = [
         {
           role: 'system',
           content: `
-        You are a **strict Boulevard booking assistant**. 
+ You are a **strict Boulevard booking assistant**. 
         Follow this structured workflow step by step and do not skip any validation.
         
         1️⃣ **GREETINGS / BOOKING START**
@@ -66,71 +70,121 @@ export class ChatService {
            - Never assume a date/time without verification.
            - Never confirm booking until availability is verified.
           `,
+
+
         },
       ];
     }
-
+  
+    // 🧠 Add user message
     this.conversationHistory[sessionId].push({ role: 'user', content: userMessage });
-
-    const completion = await this.openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.5,
-      messages: this.conversationHistory[sessionId],
-      functions: this.getTools(),
-      function_call: 'auto',
-    });
-
-    const message = completion.choices[0].message;
-
-    if (message.function_call) {
-      const { name, arguments: args } = message.function_call;
-      const parsedArgs = args ? JSON.parse(args as string) : {};
-      console.log(`⚙️ Calling MCP tool: ${name}`, parsedArgs);
-
-      try {
-        const result = await this.mcpClient.callTool({
-          name,
-          arguments: parsedArgs,
-        });
-
-        const toolOutput = result?.content?.[0]?.text || JSON.stringify(result, null, 2);
-
-        this.conversationHistory[sessionId].push({
-          role: 'function',
-          name,
-          content: toolOutput,
-        });
-
-        const finalReply = await this.openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          temperature: 0.6,
-          messages: [
-            {
-              role: 'system',
-              content: `
-Summarize the tool result in a short, friendly user-facing message.
-Stay inside the booking flow context.
-If this was an internal tool call (like creating a cart), do not expose it to the user.`,
+  
+    try {
+      // 🪄 Send to OpenAI
+      const completion = await this.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        temperature: 0.5,
+        messages: this.conversationHistory[sessionId],
+        functions: this.getTools(),
+        function_call: 'auto',
+      });
+  
+      const message: any = completion?.choices?.[0]?.message || {};
+  
+      // 🛠️ 1️⃣ If OpenAI wants to call a function (MCP tool)
+      if (message.function_call) {
+        const { name, arguments: args } = message.function_call;
+        const parsedArgs = args ? JSON.parse(args as string) : {};
+        console.log(`⚙️ Calling MCP tool: ${name}`, parsedArgs);
+  
+        try {
+          const result: any = await this.mcpClient.callTool({
+            name,
+            arguments: parsedArgs,
+          });
+  
+          const toolOutput =
+            result?.content?.[0]?.text || JSON.stringify(result, null, 2);
+  
+          // Save tool output for context
+          this.conversationHistory[sessionId].push({
+            role: 'function',
+            name,
+            content: toolOutput,
+          });
+  
+          // 🔹 Summarize result for user-facing message
+          const summary = await this.openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            temperature: 0.6,
+            messages: [
+              {
+                role: 'system',
+                content: `Summarize the tool result in a polite, short message for the user. Stay inside the booking flow.`,
+              },
+              { role: 'user', content: `Tool "${name}" returned: ${toolOutput}` },
+            ],
+          });
+  
+          const assistantMessage =
+            summary?.choices?.[0]?.message?.content ||
+            'Your request has been processed successfully.';
+  
+          this.conversationHistory[sessionId].push({
+            role: 'assistant',
+            content: assistantMessage,
+          });
+  
+          return {
+            reply: {
+              role: 'assistant',
+              content: assistantMessage,
             },
-            { role: 'user', content: `Tool "${name}" returned: ${toolOutput}` },
-          ],
-        });
-
-        const assistantReply = finalReply.choices[0].message.content || toolOutput;
-        this.conversationHistory[sessionId].push({ role: 'assistant', content: assistantReply });
-        return assistantReply;
-      } catch (err: any) {
-        console.error(`❌ MCP tool ${name} failed:`, err);
-        return `Error executing tool "${name}": ${err.message}`;
+          };
+        } catch (err: any) {
+          console.error(`❌ MCP tool ${name} failed:`, err);
+          return {
+            reply: {
+              role: 'assistant',
+              content:
+                err?.message ||
+                `Something went wrong while calling tool "${name}". Please try again.`,
+            },
+          };
+        }
       }
+  
+      // 🗣️ 2️⃣ Otherwise, it’s a normal assistant message
+      const responseText =
+        typeof message?.content === 'string'
+          ? message.content.trim()
+          : 'Sorry, I could not process your request.';
+  
+      // Save assistant response in memory
+      this.conversationHistory[sessionId].push({
+        role: 'assistant',
+        content: responseText,
+      });
+  
+      // ✅ Always return consistent JSON
+      return {
+        reply: {
+          role: 'assistant',
+          content: responseText || 'Sorry, I could not process your request.',
+        },
+      };
+    } catch (error: any) {
+      console.error('❌ getResponse failed:', error);
+      return {
+        reply: {
+          role: 'assistant',
+          content:
+            'An unexpected error occurred while processing your request. Please try again.',
+        },
+      };
     }
-
-    if (message.content) {
-      this.conversationHistory[sessionId].push({ role: 'assistant', content: message.content });
-    }
-
-    return message.content || 'Sorry, I could not process your request.';
   }
+  
 
   private getTools() {
     return [

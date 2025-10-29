@@ -8,6 +8,6 @@ export class ChatController {
   @Post()
   async chat(@Body('chatInput') message: string) {
     const response = await this.chatService.getResponse(message);
-    return { reply: response };
+    return response; // ✅ don’t wrap it again
   }
 }
