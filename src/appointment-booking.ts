@@ -281,6 +281,52 @@ const RESERVE_CART_BOOKABLE_ITEMS = `mutation reserveCartBookableItems($input:Ad
     }
     }
 }`;
+
+
+
+
+const GET_CART_SUMMARY = `
+query cart($id: ID!) {
+  cart(id: $id) {
+    id
+    expiresAt
+    selectedItems {
+      id
+      ... on CartBookableItem {
+        item {
+          id
+          name
+        }
+        selectedStaffVariant {
+          id
+          duration
+          price
+          staff {
+            displayName
+          }
+        }
+      }
+    }
+    summary {
+      subtotal
+      taxAmount
+      total
+    }
+    location {
+      name
+      businessName
+    }
+    clientInformation {
+      firstName
+      lastName
+      email
+      phoneNumber
+    }
+  }
+}
+`;
+
+
 const SET_CLIENT_ON_CART = `mutation updateCart($input:UpdateCartInput!){
       updateCart(input:$input){
         cart{
@@ -363,11 +409,19 @@ const APPLY_PROMOTION_CODE = `mutation addCartOffer($input:AddCartOfferInput!){
         }
       }
     }`;
+
 server.tool("get_locations", "Get available locations for the business", async () => {
-    const data = await gql(GQL_LOCATIONS, 'CLIENT', { businessId: BLVD_BUSINESS_ID });
-    const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(locations) }] };
+  const data = await gql(GQL_LOCATIONS, 'CLIENT', { businessId: BLVD_BUSINESS_ID }, 7000);
+  const locations = data?.locations?.edges?.map(e => ({
+    id: e?.node?.id,
+    name: e?.node?.name || e?.node?.businessName,
+    city: e?.node?.address?.city,
+  })) ?? [];
+  return { content: [{ type: "text", text: JSON.stringify({ locations }) }] };
 });
+    
+
+
 server.tool("availableServices", "Get available services", {
     cartId: z.string().describe("cart id"),
 }, async ({ cartId }) => {
@@ -395,7 +449,9 @@ server.tool("addServiceToCart", "Add a service to an existing cart", {
     // const locations = data?.locations?.edges ?? [];
     return { content: [{ type: "text", text: JSON.stringify(data) }] };
 });
-server.tool("cartBookableDates", "Bookable dates for the cart", {
+
+
+server.tool("cartBookableDates", "First 15 bookable dates for the cart", {
     cartId: z.string().describe("existing cart id"),
     searchRangeLower: z.string().describe("lower range date in format YYYY-MM-DD"),
     searchRangeUpper: z.string().describe("upper range date in format YYYY-MM-DD"),
@@ -405,10 +461,12 @@ server.tool("cartBookableDates", "Bookable dates for the cart", {
         "searchRangeLower": searchRangeLower,
         "searchRangeUpper": searchRangeUpper
     });
-    // const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    // Expecting data.cartBookableDates to be an array of {date: string}
+    const dates = (data?.cartBookableDates || []).map(d => d.date).slice(0, 15);
+    return { content: [{ type: "text", text: JSON.stringify(dates) }] };
 });
-server.tool("cartBookableTimes", "Bookable times for the cart", {
+
+server.tool("cartBookableTimes", "First 15 available times for the cart and date as array of ISO strings", {
     cartId: z.string().describe("existing cart id"),
     searchDate: z.string().describe("search date in format YYYY-MM-DD"),
 }, async ({ cartId, searchDate }) => {
@@ -416,8 +474,9 @@ server.tool("cartBookableTimes", "Bookable times for the cart", {
         "id": cartId,
         "searchDate": searchDate,
     });
-    // const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    // Expecting data.cartBookableTimes to be an array of {startTime: string}
+    const slots = (data?.cartBookableTimes || []).map(s => s.startTime).slice(0, 15);
+    return { content: [{ type: "text", text: JSON.stringify(slots) }] };
 });
 server.tool("reserveCartBookableItems", "set and reserve bookable time for cart", {
     cartId: z.string().describe("existing cart id"),
@@ -430,6 +489,99 @@ server.tool("reserveCartBookableItems", "set and reserve bookable time for cart"
     // const locations = data?.locations?.edges ?? [];
     return { content: [{ type: "text", text: JSON.stringify(data) }] };
 });
+
+
+
+server.tool(
+  "getCartSummary",
+
+  {
+    cartId: z.string().describe("existing cart id"),
+  },
+  async ({ cartId }) => {
+    
+    
+    const data = await gql(GET_CART_SUMMARY, "CLIENT", { id: cartId });
+
+    const cart = data?.cart;
+
+    console.log("MCP → getCartSummary called with:", cartId);
+    console.log("cart details :", cart);
+
+    if (!cart) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Cart not found or expired.",
+          },
+        ],
+      };
+    }
+
+    const service =
+      cart.selectedItems?.[0]?.item?.name || "Unknown service";
+    const subtotal = cart.summary?.subtotal ?? 0;
+    const taxAmount = cart.summary?.taxAmount ?? 0;
+    const total = cart.summary?.total ?? 0;
+    const location = cart.location?.name || "Unknown location";
+    const clientName = `${cart.clientInformation?.firstName || ""} ${
+      cart.clientInformation?.lastName || ""
+    }`.trim();
+
+
+  console.log(cart?.summary);
+  const rawSubtotal = cart.summary?.subtotal ?? 0;
+  const rawTax = cart.summary?.taxAmount ?? 0;
+  const rawTotal = cart.summary?.total ?? 0;
+  
+  const payload = {
+    cartId: cart.id,
+    clientName: clientName || "N/A",
+    location,
+    service,
+    raw: {
+      subtotal: rawSubtotal,
+      taxAmount: rawTax,
+      total: rawTotal,
+    },
+    display: {
+      subtotal: formatAmountMaybeCents(rawSubtotal),
+      taxAmount: formatAmountMaybeCents(rawTax),
+      total: formatAmountMaybeCents(rawTotal),
+    },
+    expiresAt: cart.expiresAt || null,
+  };
+  
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(payload),
+        },
+      ],
+    };
+  }
+);
+
+
+
+// helper for formatting cents -> dollars
+function formatAmountMaybeCents(value) {
+  if (value === null || value === undefined) return null;
+  // if it's integer and looks like cents (divisible by 1 and large)
+  if (Number.isInteger(value) && Math.abs(value) >= 100 && value % 1 === 0) {
+    // If it's divisible by 100 -> treat as cents
+    if (value % 100 === 0) {
+      return (value / 100).toFixed(2);
+    }
+    // Otherwise still try /100 but with warning
+    return (value / 100).toFixed(2);
+  }
+  // otherwise assume it's already dollars/float
+  return Number(value).toFixed(2);
+}
 
 
 
@@ -479,10 +631,12 @@ server.tool("checkAvailability", "Check availability for a given service and dat
       };
     }
     
+    const searchDate = new Date(date + 'T00:00:00Z').toISOString();
+    
     // Check available times for the specified date
     const availableTimes = await gql(CART_BOOKABLE_TIMES, 'CLIENT', {
       id: cartId,
-      searchDate: date
+      searchDate: searchDate
     }, 7000);
     
     if (!time) {
