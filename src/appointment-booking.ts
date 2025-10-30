@@ -76,12 +76,18 @@ async function gql(query, requestType, variables = {}, timeoutMs = 8000) {
             throw new Error("Missing required env: BLVD_API_KEY");
         API = URL_CLIENT!;
         authenticationHeader = await generate_guest_auth_header(BLVD_API_KEY);
-    }
+    
+        console.log(authenticationHeader);
+    
+      }
     else if (requestType == 'ADMIN') {
         if (!URL_ADMIN)
             throw new Error("Missing required env: URL_ADMIN");
         API = URL_ADMIN;
         authenticationHeader = await generate_admin_auth_header();
+
+        console.log(authenticationHeader);
+        
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -425,8 +431,11 @@ server.tool("get_locations", "Get available locations for the business", async (
 server.tool("availableServices", "Get available services", {
     cartId: z.string().describe("cart id"),
 }, async ({ cartId }) => {
+  
     const data = await gql(AVAILABLE_SERVICES, 'CLIENT', { id: cartId });
-    // const locations = data?.locations?.edges ?? [];
+  
+  
+    console.log("available services:", JSON.stringify(data, null, 2));  // const locations = data?.locations?.edges ?? [];
     return { content: [{ type: "text", text: JSON.stringify(data) }] };
 });
 
@@ -438,16 +447,53 @@ server.tool("createAppointmentCart", "Create a cart scoped to a business/locatio
     // const locations = data?.locations?.edges ?? [];
     return { content: [{ type: "text", text: JSON.stringify(data) }] };
 });
+
+
+
 server.tool("addServiceToCart", "Add a service to an existing cart", {
-    cartId: z.string().describe("existing cart id"),
-    serviceId: z.string().describe("service id")
-}, async ({ cartId, serviceId }) => {
-    const data = await gql(ADD_SERVICE_TO_CART, 'CLIENT', { input: {
-            "id": cartId,
-            "itemId": serviceId
-        } });
-    // const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(data) }] };
+  cartId: z.string().describe("existing cart id"),
+  serviceId: z.string().optional().describe("service id from selected item"),
+  serviceName: z.string().optional().describe("service name (e.g. 'Classic and Hydra Facial')"),
+}, async ({ cartId, serviceId, serviceName }) => {
+
+  console.log("🛠 addServiceToCart →", { cartId, serviceId, serviceName });
+
+  // If serviceName provided, resolve to ID
+  if (!serviceId && serviceName) {
+    console.log(`Resolving service name "${serviceName}" to ID...`);
+    const servicesData = await gql(AVAILABLE_SERVICES, 'CLIENT', { id: cartId });
+
+    const allServices = servicesData?.cart?.availableCategories?.flatMap(c => c.availableItems) || [];
+    const match :any= fuzzyMatch(serviceName, allServices);
+
+    if (!match) {
+      return {
+        content: [
+          { type: "text", text: `❌ Service "${serviceName}" not found in available services.` }
+        ]
+      };
+    }
+
+    serviceId = match.id!;
+    console.log(`✅ Matched service "${serviceName}" → ${serviceId}`);
+  }
+
+  if (!serviceId) {
+    return {
+      content: [
+        { type: "text", text: `❌ Missing both serviceId and serviceName.` }
+      ]
+    };
+  }
+
+  // Proceed with booking
+  const data = await gql(ADD_SERVICE_TO_CART, 'CLIENT', {
+    input: { id: cartId, itemId: serviceId }
+  });
+
+  console.log(`🧾 Added serviceId: ${serviceId}`);
+
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 });
 
 
@@ -582,6 +628,60 @@ function formatAmountMaybeCents(value) {
   // otherwise assume it's already dollars/float
   return Number(value).toFixed(2);
 }
+
+
+
+
+
+
+server.tool(
+  "cartBookableStaffVariants",
+  "Fetch available estheticians (staff) for a selected service time.",
+  {
+    id: z.string().describe("Cart ID"),
+    itemId: z.string().describe("Service item ID"),
+    bookableTimeId: z.string().describe("Selected bookable time ID"),
+  },
+  async ({ id, itemId, bookableTimeId }) => {
+    const query = `
+      query CartBookableStaffVariants($id: ID!, $itemId: ID!, $bookableTimeId: ID!) {
+        cartBookableStaffVariants(id: $id, itemId: $itemId, bookableTimeId: $bookableTimeId) {
+          id
+          duration
+          price
+          staff {
+            id
+            displayName
+            firstName
+            lastName
+            bio
+            role { id name }
+          }
+        }
+      }
+    `;
+
+    const variables = { id, itemId, bookableTimeId };
+
+    // ✅ Pass request type explicitly as second argument
+    const result = await gql(query, "CLIENT", variables);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result?.cartBookableStaffVariants ?? [], null, 2),
+        },
+      ],
+    };
+  }
+);
+
+
+
+
+
+
 
 
 
