@@ -229,13 +229,116 @@ const AVAILABLE_SERVICES = `query serviceList($id:ID!){
         }
     }
 }`;
-const ADD_SERVICE_TO_CART = `mutation addCartSelectedBookableItem($input:AddCartSelectedBookableItemInput!){
-      addCartSelectedBookableItem(input:$input){
-        cart {
+
+
+const ADD_SERVICE_TO_CART = `
+  mutation addCartSelectedBookableItem($input: AddCartSelectedBookableItemInput!) {
+    addCartSelectedBookableItem(input: $input) {
+      cart {
+        id
+        expiresAt
+        selectedItems {
           id
+          price
+          ... on CartBookableItem {
+            item {
+              id
+              name
+              optionGroups {
+                id
+                name
+              }
+            }
+            guest {
+              email
+              firstName
+              id
+              label
+              lastName
+              number
+              phoneNumber
+            }
+            guestId
+            selectedOptions {
+              id
+              name
+              priceDelta
+              groupId
+              durationDelta
+              description
+            }
+          }
+          addons {
+            id
+            name
+            description
+            disabled
+            disabledDescription
+            listPrice
+            listPriceRange {
+              min
+              max
+              variable
+            }
+            ... on CartAvailableBookableItem {
+              optionGroups {
+                id
+                name
+                description
+                options {
+                  id
+                  name
+                  description
+                  durationDelta
+                  priceDelta
+                }
+              }
+            }
+          }
+          item {
+            id
+            name
+            description
+            disabled
+            disabledDescription
+          }
+        }
+        summary {
+          deposit
+          depositAmount
+          discountAmount
+          gratuityAmount
+          paymentMethodRequired
+          roundingAmount
+          subtotal
+          taxAmount
+          total
+        }
+        bookingQuestions {
+          id
+          key
+          label
+          required
+        }
+        clientInformation {
+          email
+          firstName
+          lastName
+          phoneNumber
+          externalId
+        }
+        location {
+          id
+          name
+          businessName
         }
       }
-    }`;
+    }
+  }
+`;
+
+
+
 const CART_BOOKABLE_DATES = `query cartBookableDates($id:ID!, $searchRangeLower:Date, $searchRangeUpper:Date){
       cartBookableDates(id:$id, searchRangeLower:$searchRangeLower, searchRangeUpper:$searchRangeUpper){
           date
@@ -423,6 +526,10 @@ server.tool("get_locations", "Get available locations for the business", async (
     name: e?.node?.name || e?.node?.businessName,
     city: e?.node?.address?.city,
   })) ?? [];
+  
+  
+  console.error("[MCP SERVER] has returned locations:", locations);
+
   return { content: [{ type: "text", text: JSON.stringify({ locations }) }] };
 });
     
@@ -435,7 +542,7 @@ server.tool("availableServices", "Get available services", {
     const data = await gql(AVAILABLE_SERVICES, 'CLIENT', { id: cartId });
   
   
-    console.log("available services:", JSON.stringify(data, null, 2));  // const locations = data?.locations?.edges ?? [];
+    // console.error("available services:", JSON.stringify(data, null, 2));  // const locations = data?.locations?.edges ?? [];
     return { content: [{ type: "text", text: JSON.stringify(data) }] };
 });
 
@@ -445,6 +552,10 @@ server.tool("createAppointmentCart", "Create a cart scoped to a business/locatio
 }, async ({ locationId }) => {
     const data = await gql(CREATE_CART, 'CLIENT', { input: { locationId: locationId } });
     // const locations = data?.locations?.edges ?? [];
+   
+    console.error(data);
+    console.error(locationId);
+   
     return { content: [{ type: "text", text: JSON.stringify(data) }] };
 });
 
@@ -452,11 +563,11 @@ server.tool("createAppointmentCart", "Create a cart scoped to a business/locatio
 
 server.tool("addServiceToCart", "Add a service to an existing cart", {
   cartId: z.string().describe("existing cart id"),
-  serviceId: z.string().optional().describe("service id from selected item"),
+  serviceId: z.string().optional().describe("existing service id"),
   serviceName: z.string().optional().describe("service name (e.g. 'Classic and Hydra Facial')"),
 }, async ({ cartId, serviceId, serviceName }) => {
 
-  console.log("🛠 addServiceToCart →", { cartId, serviceId, serviceName });
+  console.error("🛠 addServiceToCart →", { cartId, serviceId, serviceName });
 
   // If serviceName provided, resolve to ID
   if (!serviceId && serviceName) {
@@ -502,17 +613,22 @@ server.tool("cartBookableDates", "First 15 bookable dates for the cart", {
     searchRangeLower: z.string().describe("lower range date in format YYYY-MM-DD"),
     searchRangeUpper: z.string().describe("upper range date in format YYYY-MM-DD"),
 }, async ({ cartId, searchRangeLower, searchRangeUpper }) => {
-    const data = await gql(CART_BOOKABLE_DATES, 'CLIENT', {
+    
+  
+  const data = await gql(CART_BOOKABLE_DATES, 'CLIENT', {
         "id": cartId,
         "searchRangeLower": searchRangeLower,
         "searchRangeUpper": searchRangeUpper
     });
+    
     // Expecting data.cartBookableDates to be an array of {date: string}
     const dates = (data?.cartBookableDates || []).map(d => d.date).slice(0, 15);
+    
+    
     return { content: [{ type: "text", text: JSON.stringify(dates) }] };
 });
 
-server.tool("cartBookableTimes", "First 15 available times for the cart and date as array of ISO strings", {
+server.tool("cartBookableTimes", "First 15 available times for the cart and date as array of slot objects", {
     cartId: z.string().describe("existing cart id"),
     searchDate: z.string().describe("search date in format YYYY-MM-DD"),
 }, async ({ cartId, searchDate }) => {
@@ -520,8 +636,8 @@ server.tool("cartBookableTimes", "First 15 available times for the cart and date
         "id": cartId,
         "searchDate": searchDate,
     });
-    // Expecting data.cartBookableTimes to be an array of {startTime: string}
-    const slots = (data?.cartBookableTimes || []).map(s => s.startTime).slice(0, 15);
+    // Return the full slot objects with id and startTime
+    const slots = (data?.cartBookableTimes || []).slice(0, 15);
     return { content: [{ type: "text", text: JSON.stringify(slots) }] };
 });
 server.tool("reserveCartBookableItems", "set and reserve bookable time for cart", {
@@ -540,19 +656,14 @@ server.tool("reserveCartBookableItems", "set and reserve bookable time for cart"
 
 server.tool(
   "getCartSummary",
-
   {
-    cartId: z.string().describe("existing cart id"),
+    cartId: z.string().describe("Existing cart ID"),
   },
   async ({ cartId }) => {
-    
-    
+    console.log("🧾 MCP → getCartSummary called with:", cartId);
+
     const data = await gql(GET_CART_SUMMARY, "CLIENT", { id: cartId });
-
     const cart = data?.cart;
-
-    console.log("MCP → getCartSummary called with:", cartId);
-    console.log("cart details :", cart);
 
     if (!cart) {
       return {
@@ -565,46 +676,12 @@ server.tool(
       };
     }
 
-    const service =
-      cart.selectedItems?.[0]?.item?.name || "Unknown service";
-    const subtotal = cart.summary?.subtotal ?? 0;
-    const taxAmount = cart.summary?.taxAmount ?? 0;
-    const total = cart.summary?.total ?? 0;
-    const location = cart.location?.name || "Unknown location";
-    const clientName = `${cart.clientInformation?.firstName || ""} ${
-      cart.clientInformation?.lastName || ""
-    }`.trim();
-
-
-  console.log(cart?.summary);
-  const rawSubtotal = cart.summary?.subtotal ?? 0;
-  const rawTax = cart.summary?.taxAmount ?? 0;
-  const rawTotal = cart.summary?.total ?? 0;
-  
-  const payload = {
-    cartId: cart.id,
-    clientName: clientName || "N/A",
-    location,
-    service,
-    raw: {
-      subtotal: rawSubtotal,
-      taxAmount: rawTax,
-      total: rawTotal,
-    },
-    display: {
-      subtotal: formatAmountMaybeCents(rawSubtotal),
-      taxAmount: formatAmountMaybeCents(rawTax),
-      total: formatAmountMaybeCents(rawTotal),
-    },
-    expiresAt: cart.expiresAt || null,
-  };
-  
-
+    // ✅ Simply return the backend response as-is
     return {
       content: [
         {
           type: "text",
-          text: JSON.stringify(payload),
+          text: JSON.stringify(cart),
         },
       ],
     };
@@ -613,23 +690,155 @@ server.tool(
 
 
 
-// helper for formatting cents -> dollars
-function formatAmountMaybeCents(value) {
-  if (value === null || value === undefined) return null;
-  // if it's integer and looks like cents (divisible by 1 and large)
-  if (Number.isInteger(value) && Math.abs(value) >= 100 && value % 1 === 0) {
-    // If it's divisible by 100 -> treat as cents
-    if (value % 100 === 0) {
-      return (value / 100).toFixed(2);
-    }
-    // Otherwise still try /100 but with warning
-    return (value / 100).toFixed(2);
-  }
-  // otherwise assume it's already dollars/float
-  return Number(value).toFixed(2);
+
+function formatAmount(value?: number | null): string {
+  if (!value) return "0.00";
+  return (value / 100).toFixed(2);
 }
 
 
+
+
+server.tool(
+  "updateCartSelectedBookableItem",
+  "Update a cart's selected bookable item details (guest, options, staff variant).",
+  {
+    cartId: z.string().describe("Cart ID"),
+    itemId: z.string().describe("Service Item ID"),
+    itemStaffVariantId: z.string().optional().describe("Staff variant ID (optional)"),
+    itemGuestId: z.string().optional().describe("Guest ID (optional)"),
+    itemOptionIds: z.array(z.string()).optional().describe("List of selected option IDs (optional)"),
+    clientId: z.string().optional().describe("Client ID (optional)"),
+  },
+  async ({ cartId, itemId, itemStaffVariantId, itemGuestId, itemOptionIds, clientId }) => {
+    try {
+      const mutation = `
+        mutation updateCartSelectedBookableItem($input: AddCartSelectedBookableItemInput!) {
+          updateCartSelectedBookableItem(input: $input) {
+            cart {
+              id
+              expiresAt
+              selectedItems {
+                id
+                price
+                ...on CartBookableItem {
+                  selectedOptions {
+                    id
+                    name
+                    priceDelta
+                    groupId
+                    durationDelta
+                    description
+                  }
+                }
+                addons {
+                  id
+                  name
+                  description
+                  disabled
+                  disabledDescription
+                  listPrice
+                  listPriceRange {
+                    min
+                    max
+                    variable
+                  }
+                  ...on CartAvailableBookableItem {
+                    optionGroups {
+                      id
+                      name
+                      description
+                      options {
+                        id
+                        name
+                        description
+                        durationDelta
+                        priceDelta
+                      }
+                    }
+                  }
+                }
+                item {
+                  id
+                  name
+                  description
+                  disabled
+                  disabledDescription
+                }
+              }
+              summary {
+                deposit
+                depositAmount
+                discountAmount
+                gratuityAmount
+                paymentMethodRequired
+                roundingAmount
+                subtotal
+                taxAmount
+                total
+              }
+              bookingQuestions {
+                id
+                key
+                label
+                required
+              }
+              clientInformation {
+                email
+                firstName
+                lastName
+                phoneNumber
+                externalId
+              }
+              location {
+                id
+                name
+                businessName
+              }
+            }
+          }
+        }
+      `;
+
+      const variables = {
+        input: {
+          id: cartId,
+          itemId,
+          itemGuestId,
+          itemOptionIds,
+          itemStaffVariantId,
+        },
+      };
+
+      // 🧠 Call your GraphQL helper (gql or fetchRequest)
+      const data = await gql(mutation, "CLIENT", variables);
+
+      console.log("🧩 [updateCartSelectedBookableItem] success:", data);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(data?.updateCartSelectedBookableItem ?? {}, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      console.error("❌ [updateCartSelectedBookableItem] failed:", error);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: true,
+              message: error?.message || "Unknown error",
+            }),
+          },
+        ],
+      };
+    }
+  }
+);
 
 
 
@@ -639,7 +848,7 @@ server.tool(
   "Fetch available estheticians (staff) for a selected service time.",
   {
     id: z.string().describe("Cart ID"),
-    itemId: z.string().describe("Service item ID"),
+    itemId: z.string().describe("existing Item ID"),
     bookableTimeId: z.string().describe("Selected bookable time ID"),
   },
   async ({ id, itemId, bookableTimeId }) => {
@@ -663,20 +872,52 @@ server.tool(
 
     const variables = { id, itemId, bookableTimeId };
 
-    // ✅ Pass request type explicitly as second argument
-    const result = await gql(query, "CLIENT", variables);
+    console.error("id", id);
+    console.error("itemId", itemId);
+    console.error("bookableTimeId", bookableTimeId);
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(result?.cartBookableStaffVariants ?? [], null, 2),
-        },
-      ],
-    };
+
+    try {
+      console.error("🧠 [MCP SERVER] Fetching staff variants with:", variables);
+
+      const result = await gql(query, "CLIENT", variables);
+
+      console.error("✅ [MCP SERVER] Staff variants fetched successfully.");
+      console.error("📦 [MCP SERVER] Raw result:", JSON.stringify(result, null, 2));
+
+      console.error(" result", result);
+
+
+      const staffVariants = result?.cartBookableStaffVariants ?? [];
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(staffVariants, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      console.error("❌ [MCP SERVER] cartBookableStaffVariants failed!");
+      console.error("Error message:", error?.message || error);
+      console.error("Stack trace:", error?.stack || "No stack trace available");
+
+      // Return error as MCP content so client side can also log it
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: true,
+              message: error?.message || "Unknown error occurred while fetching staff variants",
+            }),
+          },
+        ],
+      };
+    }
   }
 );
-
 
 
 
