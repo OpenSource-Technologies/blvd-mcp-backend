@@ -76,6 +76,7 @@ export class ChatService {
     });
 
     try {
+      console.log("fullIntent >> ",completion.choices[0].message)
       return JSON.parse(completion.choices[0].message.content || '{}');
     } catch {
       return {};
@@ -133,6 +134,17 @@ export class ChatService {
     return dateInput;
   }
 
+
+  isDateString(value: any): any {
+    return !isNaN(Date.parse(value));
+  }
+
+  isTimeFormat(str: string): any {
+    const regex = /^(0?[1-9]|1[0-2]):?[0-5]?\d?\s?(AM|PM)$/i;
+    return regex.test(str.trim());
+  }
+  
+
   async getResponse(userMessage: string, sessionId = 'default') {
     if (!this.conversationHistory[sessionId]) {
       this.conversationHistory[sessionId] = [
@@ -169,11 +181,34 @@ export class ChatService {
     // Extract intent from user message
     const intent = await this.extractBookingIntent(userMessage);
     console.log('🧠 Extracted Intent:', intent);
+    if(Object.keys(intent).length === 0){
+      if (this.isDateString(userMessage)) {
+        intent.date = userMessage;
+      }
+
+      if(this.isTimeFormat(userMessage)){
+        intent.time = userMessage;
+      }
+      console.log("empty intent = ",userMessage)
+      console.log("intent innn ",intent)
+    }else{
+      console.log("not emopty intent")
+    }
 // 🧠 Merge with previous session intent memory
 const prevIntent =
   this.conversationHistory[sessionId + '_intent'] || {};
 
-const mergedIntent = { ...prevIntent, ...intent };
+//const mergedIntent = { ...prevIntent, ...intent };
+
+let mergedIntent:any = { ...intent };
+
+for (const [key, value] of Object.entries(prevIntent)) {
+  if (value !== null && value !== undefined) mergedIntent[key] = value;
+}
+
+
+console.log("prevIntent  >> ",prevIntent);
+console.log("mergedIntent initial >> ",mergedIntent)
 
 // Save merged intent back into memory
 this.conversationHistory[sessionId + '_intent'] = mergedIntent;
@@ -188,7 +223,7 @@ console.log(`🧠 Merged Intent: ${JSON.stringify(mergedIntent, null, 2)}`);
     if (!locations) {
       try {
         const result: any = await this.mcpClient.callTool({
-          name: 'getLocations',
+          name: 'get_locations',
           arguments: {},
         });
 
@@ -272,6 +307,7 @@ console.log(`🧠 Merged Intent: ${JSON.stringify(mergedIntent, null, 2)}`);
     // STEP 4: Handle service selection
     // ========================================
     let selectedService = (this as any).conversationHistory[sessionId + '_selectedService'];
+    console.log("selectedService >> ",selectedService)
 
     if (!selectedService) {
       // Fetch available services if not already fetched
@@ -305,7 +341,8 @@ console.log(`🧠 Merged Intent: ${JSON.stringify(mergedIntent, null, 2)}`);
       console.log('🧠 Extracted Intent:', intent);
 
       
-      console.log("intent service",intent.service);
+      console.log("intent service",intent);
+      console.log("mergedIntent service>> ",mergedIntent)
       
       // Check if user provided service in their message
       if (mergedIntent.service) {
@@ -390,6 +427,7 @@ console.log(`🧠 Merged Intent: ${JSON.stringify(mergedIntent, null, 2)}`);
       }
 
       // Check if user provided date in their message
+      console.log("mergedIntent  >> ",mergedIntent);
       if (mergedIntent.date) {
         const parsedDate = this.parseDate(mergedIntent.date);
         const match = bookableDates.find((d: string) => d === parsedDate || d.includes(parsedDate));
@@ -407,7 +445,7 @@ console.log(`🧠 Merged Intent: ${JSON.stringify(mergedIntent, null, 2)}`);
           return {
             reply: {
               role: 'assistant',
-              content: `"${mergedIntent.date}" is not available. Here are the available dates:\n${list}\n\nPlease choose one by typing the number or date.`,
+              content: `"${match}" is not available. Here are the available dates:\n${list}\n\nPlease choose one by typing the number or date.`,
             },
           };
         }
@@ -463,6 +501,9 @@ console.log(`🧠 Merged Intent: ${JSON.stringify(mergedIntent, null, 2)}`);
                  slot.startTime.includes(mergedIntent.time!);
         });
 
+
+        console.log("match time >> ",match)
+
         if (match) {
           selectedTimeSlot = match;
           (this as any).conversationHistory[sessionId + '_selectedTimeSlot'] = selectedTimeSlot;
@@ -483,6 +524,20 @@ console.log(`🧠 Merged Intent: ${JSON.stringify(mergedIntent, null, 2)}`);
             return { reply: { role: 'assistant', content: 'Failed to reserve time slot. Please try again.' } };
           }
         } else {
+
+          const time = mergedIntent.time;
+          const [hours, minutes] = time.split(':').map(Number);
+          
+          const date = new Date();
+          date.setHours(hours, minutes);
+          
+          const formatted = date.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          });
+
+
           // Time mentioned but not available
           const list = bookableTimes.map((t: any, i: number) => 
             `${i + 1}. ${new Date(t.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
@@ -490,7 +545,7 @@ console.log(`🧠 Merged Intent: ${JSON.stringify(mergedIntent, null, 2)}`);
           return {
             reply: {
               role: 'assistant',
-              content: `"${intent.time}" is not available on ${selectedDate}. Here are the available times:\n${list}\n\nPlease choose one by typing the number.`,
+              content: `"${formatted}" is not available on ${selectedDate}. Here are the available times:\n${list}\n\nPlease choose one by typing the number.`,
             },
           };
         }
