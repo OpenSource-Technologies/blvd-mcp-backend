@@ -399,7 +399,7 @@ console.log(`🧠 Merged Intent: ${JSON.stringify(mergedIntent, null, 2)}`);
     // STEP 5: Handle date selection
     // ========================================
     let selectedDate = (this as any).conversationHistory[sessionId + '_selectedDate'];
-
+  
     if (!selectedDate) {
       let bookableDates = (this as any).conversationHistory[sessionId + '_bookableDates'];
 
