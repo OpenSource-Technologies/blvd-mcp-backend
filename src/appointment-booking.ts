@@ -519,7 +519,7 @@ const APPLY_PROMOTION_CODE = `mutation addCartOffer($input:AddCartOfferInput!){
       }
     }`;
 
-server.tool("get_locations", "Get available locations for the business", async () => {
+server.tool("getLocations", "Get available locations for the business", async () => {
   const data = await gql(GQL_LOCATIONS, 'CLIENT', { businessId: BLVD_BUSINESS_ID }, 7000);
   const locations = data?.locations?.edges?.map(e => ({
     id: e?.node?.id,
@@ -567,44 +567,14 @@ server.tool("addServiceToCart", "Add a service to an existing cart", {
   serviceName: z.string().optional().describe("service name (e.g. 'Classic and Hydra Facial')"),
 }, async ({ cartId, serviceId, serviceName }) => {
 
-  console.error("🛠 addServiceToCart →", { cartId, serviceId, serviceName });
-
-  // If serviceName provided, resolve to ID
-  if (!serviceId && serviceName) {
-    console.log(`Resolving service name "${serviceName}" to ID...`);
-    const servicesData = await gql(AVAILABLE_SERVICES, 'CLIENT', { id: cartId });
-
-    const allServices = servicesData?.cart?.availableCategories?.flatMap(c => c.availableItems) || [];
-    const match :any= fuzzyMatch(serviceName, allServices);
-
-    if (!match) {
-      return {
-        content: [
-          { type: "text", text: `❌ Service "${serviceName}" not found in available services.` }
-        ]
-      };
-    }
-
-    serviceId = match.id!;
-    console.log(`✅ Matched service "${serviceName}" → ${serviceId}`);
-  }
-
-  if (!serviceId) {
-    return {
-      content: [
-        { type: "text", text: `❌ Missing both serviceId and serviceName.` }
-      ]
-    };
-  }
-
-  // Proceed with booking
+ 
   const data = await gql(ADD_SERVICE_TO_CART, 'CLIENT', {
     input: { id: cartId, itemId: serviceId }
   });
 
-  console.log(`🧾 Added serviceId: ${serviceId}`);
+  console.error(`🧾 return data: ${JSON.stringify(data)}`);
 
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(data) }] };
 });
 
 
@@ -618,12 +588,15 @@ server.tool("cartBookableDates", "First 15 bookable dates for the cart", {
   const data = await gql(CART_BOOKABLE_DATES, 'CLIENT', {
         "id": cartId,
         "searchRangeLower": searchRangeLower,
-        "searchRangeUpper": searchRangeUpper
+        "searchRangeUpper": searchRangeUpper,
+
+
+
     });
     
     // Expecting data.cartBookableDates to be an array of {date: string}
-    const dates = (data?.cartBookableDates || []).map(d => d.date).slice(0, 15);
-    
+    const dates = (data?.cartBookableDates || []).map(d => d.date).slice(0, 5);
+    console.error(data);
     
     return { content: [{ type: "text", text: JSON.stringify(dates) }] };
 });
@@ -843,15 +816,97 @@ server.tool(
 
 
 
+// server.tool(
+//   "cartBookableStaffVariants",
+//   "Fetch available estheticians (staff) for a selected service time.",
+//   {
+//     id: z.string().describe("Cart ID"),
+//     itemId: z.string().describe("existing Selected item ID"),
+//     bookableTimeId: z.string().describe("Selected bookable time ID"),
+//   },
+//   async ({ id, itemId, bookableTimeId }) => {
+//     const query = `
+//       query CartBookableStaffVariants($id: ID!, $itemId: ID!, $bookableTimeId: ID!) {
+//         cartBookableStaffVariants(id: $id, itemId: $itemId, bookableTimeId: $bookableTimeId) {
+//           id
+//           duration
+//           price
+//           staff {
+//             id
+//             displayName
+//             firstName
+//             lastName
+//             bio
+//             role { id name }
+//           }
+//         }
+//       }
+//     `;
+
+//     const variables = { id, itemId, bookableTimeId };
+
+//     console.error("id", id);
+//     console.error("itemId", itemId);
+//     console.error("bookableTimeId", bookableTimeId);
+
+
+//     try {
+//       console.error("🧠 [MCP SERVER] Fetching staff variants with:", variables);
+
+//       const result = await gql(query, "CLIENT", variables);
+
+//       console.error("✅ [MCP SERVER] Staff variants fetched successfully.");
+//       console.error("📦 [MCP SERVER] Raw result:", JSON.stringify(result, null, 2));
+
+//       console.error(" result", result);
+
+
+//       const staffVariants = result?.cartBookableStaffVariants ?? [];
+
+//       return {
+//         content: [
+//           {
+//             type: "text",
+//             text: JSON.stringify(staffVariants, null, 2),
+//           },
+//         ],
+//       };
+//     } catch (error: any) {
+//       console.error("❌ [MCP SERVER] cartBookableStaffVariants failed!");
+//       console.error("Error message:", error?.message || error);
+//       console.error("Stack trace:", error?.stack || "No stack trace available");
+
+//       // Return error as MCP content so client side can also log it
+//       return {
+//         content: [
+//           {
+//             type: "text",
+//             text: JSON.stringify({
+//               error: true,
+//               message: error?.message || "Unknown error occurred while fetching staff variants",
+//             }),
+//           },
+//         ],
+//       };
+//     }
+//   }
+// );
 server.tool(
   "cartBookableStaffVariants",
   "Fetch available estheticians (staff) for a selected service time.",
   {
-    id: z.string().describe("Cart ID"),
-    itemId: z.string().describe("existing Item ID"),
+    cartId: z.string().describe("Cart ID"), // ✅ clear and correct
+    itemId: z
+      .string()
+      .optional()
+      .describe("Selected item ID *in the cart* (optional, will use static fallback if missing)"),
     bookableTimeId: z.string().describe("Selected bookable time ID"),
   },
-  async ({ id, itemId, bookableTimeId }) => {
+  async ({ cartId, itemId, bookableTimeId }) => {
+    // ✅ Use static fallback for itemId (for testing)
+    const staticItemId = "urn:blvd:Service:935fabc9-a3bb-47a4-81ff-0bc48b4d0cce";
+    const effectiveItemId = itemId || staticItemId;
+
     const query = `
       query CartBookableStaffVariants($id: ID!, $itemId: ID!, $bookableTimeId: ID!) {
         cartBookableStaffVariants(id: $id, itemId: $itemId, bookableTimeId: $bookableTimeId) {
@@ -864,29 +919,28 @@ server.tool(
             firstName
             lastName
             bio
-            role { id name }
+            role {
+              id
+              name
+            }
           }
         }
       }
     `;
 
-    const variables = { id, itemId, bookableTimeId };
+    const variables = {
+      id: cartId,                // ✅ map cartId → id (GraphQL variable)
+      itemId: effectiveItemId,   // ✅ use provided or static
+      bookableTimeId,
+    };
 
-    console.error("id", id);
-    console.error("itemId", itemId);
-    console.error("bookableTimeId", bookableTimeId);
-
+    console.error("🧠 [MCP SERVER] Fetching staff variants with:", variables);
 
     try {
-      console.error("🧠 [MCP SERVER] Fetching staff variants with:", variables);
-
       const result = await gql(query, "CLIENT", variables);
 
       console.error("✅ [MCP SERVER] Staff variants fetched successfully.");
       console.error("📦 [MCP SERVER] Raw result:", JSON.stringify(result, null, 2));
-
-      console.error(" result", result);
-
 
       const staffVariants = result?.cartBookableStaffVariants ?? [];
 
@@ -903,14 +957,15 @@ server.tool(
       console.error("Error message:", error?.message || error);
       console.error("Stack trace:", error?.stack || "No stack trace available");
 
-      // Return error as MCP content so client side can also log it
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify({
               error: true,
-              message: error?.message || "Unknown error occurred while fetching staff variants",
+              message:
+                error?.message ||
+                "Unknown error occurred while fetching staff variants",
             }),
           },
         ],

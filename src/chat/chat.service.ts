@@ -3,6 +3,8 @@ import OpenAI from 'openai';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
+// The BookingIntent interface is no longer strictly necessary for state management, 
+// but we keep it here to define the structure of the data the AI *implicitly* manages.
 interface BookingIntent {
   service?: string;
   location?: string;
@@ -15,6 +17,7 @@ interface BookingIntent {
 export class ChatService {
   private openai: OpenAI;
   private mcpClient: Client;
+  // conversationHistory now stores messages only; state is managed by the AI's reasoning.
   private conversationHistory: Record<string, OpenAI.Chat.Completions.ChatCompletionMessageParam[]> = {};
 
   constructor() {
@@ -22,14 +25,17 @@ export class ChatService {
   }
 
   private async initialize() {
+    // Ensure API Key is available
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
+    // Setup MCP Client Transport
     const transport = new StdioClientTransport({
       command: 'node',
       args: ['dist/appointment-booking.js'],
       stderr: 'inherit',
     });
 
+    // Logging for the MCP server process
     // @ts-ignore
     transport.process?.stdout?.on('data', (data: Buffer) => {
       console.log('🪶 [MCP SERVER STDOUT]:', data.toString().trim());
@@ -48,597 +54,449 @@ export class ChatService {
     console.log('✅ Connected to MCP Server');
   }
 
-  /**
-   * Extract booking intent from user message using GPT
-   */
-  private async extractBookingIntent(userMessage: string): Promise<BookingIntent> {
-    const completion = await this.openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `You are an intent extraction assistant. Extract booking details from user messages.
-          Return ONLY a JSON object with these optional fields: service, location, date, time, esthetician.
-          If a field is not mentioned, omit it or set to null.
-          
-          Examples:
-          - "I want to book classic haircut at 6am on 12 nov 2025" → {"service": "classic haircut", "date": "2025-11-12", "time": "06:00"}
-          - "book at first sandbox location" → {"location": "first sandbox"}
-          - "haircut tomorrow at 3pm" → {"service": "haircut", "date": "tomorrow", "time": "15:00"}
-          
-          For dates: Convert to YYYY-MM-DD format if possible, otherwise keep as-is (e.g., "tomorrow", "next monday")
-          For times: Convert to 24-hour HH:MM format if possible
-          `,
+  // Helper to define the full list of available tools (MCP functions) for OpenAI
+  private getBookingTools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
+    return [
+      {
+        type: 'function',
+        function: {
+          name: 'getLocations',
+          description: 'Fetches all available locations for booking. Use this first.',
+          parameters: { type: 'object', properties: {} },
         },
-        { role: 'user', content: userMessage },
-      ],
-      response_format: { type: 'json_object' },
-    });
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'createAppointmentCart',
+          description: 'Creates a new booking cart for a specified location. Requires locationId.',
+          parameters: {
+            type: 'object',
+            properties: { locationId: { type: 'string', description: 'The ID of the selected location.' } },
+            required: ['locationId'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'availableServices',
+          description: 'Fetches all available services for the current cart/location. Requires cartId.',
+          parameters: {
+            type: 'object',
+            properties: { cartId: { type: 'string', description: 'The ID of the current cart.' } },
+            required: ['cartId'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'addServiceToCart',
+          description: '**CRITICAL STEP:** Adds a chosen service to the cart. This MUST be called immediately after identifying the service from the `availableServices` list. Requires cartId and the serviceId.',
+          
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: { type: 'string' },
+              serviceId: { type: 'string', description: 'The ID of the service to add.' },
+            },
+            required: ['cartId', 'serviceId'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'cartBookableDates',
+          description: 'Fetches available booking dates for the selected service in the cart. Requires cartId.',
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: { type: 'string' },
+              // Note: The AI should decide the range or rely on a default if not specified.
+              searchRangeLower: { type: 'string', description: 'Start date for search (YYYY-MM-DD).' },
+              searchRangeUpper: { type: 'string', description: 'End date for search (YYYY-MM-DD).' },
+            },
+            required: ['cartId'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'cartBookableTimes',
+          description: 'Fetches available time slots for the selected date and service. Requires cartId and searchDate.',
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: { type: 'string' },
+              searchDate: { type: 'string', description: 'The date to search for times (YYYY-MM-DD).' },
+            },
+            required: ['cartId', 'searchDate'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'reserveCartBookableItems',
+          description: 'Reserves the chosen time slot in the cart. Required after date/time selection. Requires cartId and bookableTimeId.',
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: { type: 'string' },
+              bookableTimeId: { type: 'string', description: 'The ID of the specific time slot to reserve.' },
+            },
+            required: ['cartId', 'bookableTimeId'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'cartBookableStaffVariants',
+          description: 'Fetches available staff for the reserved service/time slot. Requires cartId, serviceItemId (the ID of the item *in the cart*), and bookableTimeId.',
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: { type: 'string', description: 'The cart ID.' },
+              itemId: { type: 'string', description: 'The selected item ID *in the cart* (use selectedItems[N].id).' },
+              bookableTimeId: { type: 'string', description: 'The ID of the reserved time slot.' },
+            },
+            required: ['cartId', 'itemId', 'bookableTimeId'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'updateCartSelectedBookableItem',
+          description: 'Assigns a staff member to the reserved service. Requires cartId, itemId, and staffVariantId.',
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: { type: 'string' },
+              itemId: { type: 'string', description: 'The selected item ID *in the cart*.' },
+              staffVariantId: { type: 'string', description: 'The ID of the chosen staff variant.' },
+            },
+            required: ['cartId', 'itemId', 'staffVariantId'],
+          },
+        },
+      },
 
-    try {
-      return JSON.parse(completion.choices[0].message.content || '{}');
-    } catch {
-      return {};
-    }
+      {
+        type: 'function',
+        function: {
+          name: 'setClientOnCart',
+          description: 'Attaches client information to the cart before checkout (first name, last name, email, phone number).',
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: { type: 'string', description: 'Existing cart ID.' },
+              firstName: { type: 'string', description: 'User first name.' },
+              lastName: { type: 'string', description: 'User last name.' },
+              email: { type: 'string', description: 'User email address.' },
+              phoneNumber: { type: 'string', description: 'User phone number.' },
+            },
+            required: ['cartId', 'firstName', 'lastName', 'email', 'phoneNumber'],
+          },
+        },
+      },
+
+      {
+        type: 'function',
+        function: {
+          name: 'getCartSummary',
+          description: 'Retrieves the final summary and total price of the cart. Use before asking for final confirmation.',
+          parameters: {
+            type: 'object',
+            properties: { cartId: { type: 'string' } },
+            required: ['cartId'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'confirmBooking',
+          description: 'Finalizes the appointment booking. Only call after all details are selected and confirmed by the user.',
+          parameters: {
+            type: 'object',
+            properties: { cartId: { type: 'string' } },
+            required: ['cartId'],
+          },
+        },
+      },
+    ];
   }
+// Inside ChatService class:
+// Inside ChatService class:
+// Inside ChatService class:
+// Inside ChatService class:
+// Inside ChatService class:
 
-  /**
-   * Match user input against available options (fuzzy matching)
-   */
-  private findBestMatch(userInput: string, options: any[], nameField: string = 'name'): any {
-    const input = userInput.toLowerCase().trim();
+private buildSystemPrompt(): OpenAI.Chat.Completions.ChatCompletionMessageParam {
     
-    // Try exact match first
-    let match = options.find(opt => opt[nameField]?.toLowerCase() === input);
-    if (match) return match;
-
-    // Try partial match
-    match = options.find(opt => opt[nameField]?.toLowerCase().includes(input));
-    if (match) return match;
-
-    // Try reverse partial match (input contains option name)
-    match = options.find(opt => input.includes(opt[nameField]?.toLowerCase()));
-    return match;
-  }
-
-  /**
-   * Parse flexible date input
-   */
-  private parseDate(dateInput: string): string {
+  const getTodayDate = () => {
     const today = new Date();
-    const input = dateInput.toLowerCase();
+    return today.toISOString().split('T')[0];
+  };
 
-    if (input === 'today') {
-      return today.toISOString().split('T')[0];
-    }
-    if (input === 'tomorrow') {
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      return tomorrow.toISOString().split('T')[0];
-    }
-    
-    // Try parsing as ISO date
-    if (/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
-      return dateInput;
+
+  
+  return {
+    role: 'system',
+    content: `
+You are a highly flexible, intelligent, and conversational appointment booking AI. Your primary tool is the list of functions provided to manage the booking state through a commerce cart system (Model Context Protocol).
+
+**NOTE ON CONTEXT MEMORY:** To save on context size, I will occasionally **internally summarize** the current booking state (Location, Cart ID, Service ID, Time ID) and replace the verbose history with this summary. **You must always rely on the most recent information provided, whether it is a full history or a concise state summary message.**
+
+## CORE DIRECTIVES FOR FLEXIBILITY & STATE MANAGEMENT:
+
+1.  **Goal:** Guide the user to a fully confirmed appointment.
+2.  **Scope Guardrail:** Your function is strictly limited to booking **salon, spa, or similar personal care services**. If the user attempts to book anything outside this scope (e.g., "cricket match," "flight," "pizza"), you must politely inform them that you can only assist with **appointment booking for services** and ask them to specify the service they want.
+3.  **State Management:** You are responsible for maintaining the state of the booking (Location ID, Cart ID, Service Item ID, Date, Time, Staff Variant ID) by intelligently reasoning over the conversation history and the JSON results from the function calls. **You must track these IDs mentally/contextually.**
+4.  **Conversational Flexibility:**
+  * **Status Check:** If the user asks for *any* current selection (e.g., "What location did I choose?", "What time is selected?"), respond conversationally with the current known state. **Do not make a function call for status checks unless necessary to retrieve a detail (like the full cart summary).**
+  * **Change Request:** If the user asks to change an item (e.g., "Change my service to X"), use the appropriate function to update the cart state (e.g., \`addServiceToCart\`, or by changing the selected date/time/staff).
+  * **Intent Injection:** If the user provides multiple details at once (e.g., "Book a haircut at the First Sandbox location tomorrow at 3pm"), immediately call the necessary functions in the correct order to validate and set all the provided details.
+5.  **Booking Flow Order:** The logical sequence is strict: **Location → Create Cart → Service ID Acquisition → CRITICAL: Service Commitment (Add to Cart) → Date → Time → CRITICAL: Reserve Time Slot → Staff → Summary & Confirmation.** Only call a function when the required data for that step is missing or needs validation/update.
+  * **CRITICAL STEP CHAINING 1 (Service):** After successfully running the \`availableServices\` tool, you **MUST immediately take a conversational turn** to present the options to the user before proceeding. You **MUST NOT** call \`addServiceToCart\` in the same turn.
+  * **CRITICAL STEP CHAINING 2 (Time):** After successfully receiving a list of available times from \`cartBookableTimes\`, you **must immediately** call \`reserveCartBookableItems\` using the chosen time ID to secure the slot before proceeding to staff selection. Staff cannot be selected until a time slot is reserved.
+6.  **CRITICAL DATE CONSTRAINT (USE USER'S DATE):** **If the user explicitly provides a date (e.g., '7 nov'), you MUST use that date (YYYY-MM-DD format) for all subsequent date-related tool calls** (\`cartBookableDates\`, \`cartBookableTimes\`). You must only default to starting the search from **today's date, ${getTodayDate()}**, if *no* specific date is mentioned by the user. **NEVER** override the user's specific future date with the current date.
+7.  **CRITICAL ID CLARIFICATION:** When identifying the service item ID for **\`cartBookableStaffVariants\`** or **\`updateCartSelectedBookableItem\`**, you must use the **top-level \`id\`** of the object in the cart's \`selectedItems\` array. **NEVER** use the nested \`item.id\` field, as it is the wrong identifier for booking staff.
+8.  **Error Handling:** If a function call returns an error or an empty list (e.g., no available times), clearly inform the user and ask them to choose a different option.
+9.  **Presentation:** Use clear, formatted lists (using Markdown bullets or numbering) when presenting options to the user (locations, services, dates, times).
+10. **CRITICAL CURRENCY CLARIFICATION (FIXED):** When reporting any monetary values (prices, subtotals, taxes, totals) from the API (like \`getCartSummary\`), you **MUST** assume the number is in **cents (USD)**.  
+To display the final price in the standard format (**$X.XX**), you must:
+
+* **Divide the number by 100.**
+* **Format the result with a dollar sign ($) and two decimal places.**
+
+
+*Example:* If the API returns \`1000\`, display **$10.00**.  
+If the API returns \`105000\`, display **$1,050.00**.
+
+## 🛑 MANDATORY CLARIFICATION RULES (FIXED)
+
+11. **STRICT SERVICE MATCHING (MANDATORY LISTING/STOP):**
+  * **ABSOLUTE RULE:** After the tool call for \`availableServices\` returns a JSON result, you **MUST immediately respond conversationally** by listing all service options. You **MUST NOT** call \`addServiceToCart\` in that same turn.
+  * **Your response MUST** list all service options found in the \`availableServices\` output, including their full names and price/duration (if available in the output).
+  * **Explicitly ask the user to select the specific service name or number** they wish to book. The subsequent step, \`addServiceToCart\`, can only be executed after the user provides this explicit selection.
+
+12. **MANDATORY LOCATION SELECTION (NO DEFAULTING):**
+  * **ABSOLUTE RULE:** The first step in any new booking flow **MUST** be to establish the location. If the user has not specified a location, you **MUST** call \`getLocations\`, then **list all available locations** to the user, and **explicitly ask them to choose one** before calling \`createAppointmentCart\`. **DO NOT select any location by default, even if only one is available.**
+
+13. **TIME SLOT ENFORCEMENT (AUTO-SELECT IF AVAILABLE):**
+  * **If the user explicitly provided a time in their initial query (e.g., '9am'), and that time is available in the \`cartBookableTimes\` output, you MUST automatically reserve that time slot using \`reserveCartBookableItems\` in the next tool call without asking the user again.**
+  * If the user provided a date but **NO time**, or if their specified time is **NOT available**, you **MUST** display the available time slots to the user in a clear, formatted list, and explicitly **ask the user to select their desired time**.
+
+14. **MANDATORY CLIENT DETAILS COLLECTION:**
+    * **After staff selection is complete, you MUST take a conversational turn to ask the user for their contact details (First Name, Last Name, Email, and Phone Number) before calling \`setClientOnCart\` or proceeding to final summary/payment.** You must obtain all four pieces of information before calling \`setClientOnCart\`.
+15.  **🛑 CRITICAL CART ID INTEGRITY (CHECK FOR CORRUPTION) 🛑:**
+    * The **Cart ID** is established *only* by the **\`createAppointmentCart\`** tool and always begins with **\`urn:blvd:Cart:\`**, followed by a long unique identifier.
+    * ⚠️ **NEVER EVER** use a truncated Cart ID (for example, **\`urn:blvd:Cart:\`**).  
+      You **MUST** use the complete ID (for example, **\`urn:blvd:Cart:ac67fb72-8c8f-4cef-b992-b9f9ffdfa510\`**) when calling **\`setClientOnCart\`**, **\`getCartSummary\`**, or **\`confirmBooking\`**.
+    * If the Cart ID is missing, incomplete, or corrupted, you **MUST** inform the user that the cart session is invalid and that the booking process must restart.
+
+`,
+  };
+}
+
+// ... the rest of the ChatService class is unchanged.
+
+// ... the rest of the ChatService class is unchanged.
+// ... the rest of the ChatService class is unchanged.
+// ... the rest of the ChatService class is unchanged.
+  
+  // New function for programmatic state extraction
+  private extractStateFromHistory(history: OpenAI.Chat.Completions.ChatCompletionMessageParam[]): string {
+    const state: Record<string, string> = {};
+
+    // Iterate history in reverse to find the most recent state updates
+    for (let i = history.length - 1; i >= 0; i--) {
+        const message :any= history[i];
+
+        if (message.role === 'tool' && message.content) {
+            try {
+                const toolOutput = JSON.parse(message.content);
+                
+                // --- Programmatic Extraction Logic ---
+                
+                // 1. Cart ID / Location ID (Prioritize non-empty values)
+                if (toolOutput.cartId && !state.cartId) state.cartId = toolOutput.cartId;
+                if (toolOutput.locationId && !state.locationId) state.locationId = toolOutput.locationId;
+                
+                // 2. Service Item ID (The top-level ID of the item *in the cart*)
+                // This is a crucial ID after addServiceToCart
+                if (toolOutput.selectedItems && toolOutput.selectedItems.length > 0) {
+                    const itemId = toolOutput.selectedItems[0].id;
+                    if (itemId && !state.serviceItemId) state.serviceItemId = itemId;
+                }
+                
+                // 3. Bookable Time ID (from reserveCartBookableItems or other cart updates)
+                // Look for the specific ID of the reserved slot
+                if (toolOutput.selectedBookableItem?.id && !state.bookableTimeId) {
+                    state.bookableTimeId = toolOutput.selectedBookableItem.id;
+                }
+                
+                // 4. Staff Variant ID (from updateCartSelectedBookableItem result)
+                // Staff ID might be nested or a direct property depending on the tool result structure
+                // Assuming it's often linked to the selectedItem's staffVariantId after assignment
+                if (toolOutput.selectedItems && toolOutput.selectedItems.length > 0 && toolOutput.selectedItems[0].staffVariantId) {
+                   if (!state.staffVariantId) state.staffVariantId = toolOutput.selectedItems[0].staffVariantId;
+                }
+                // If all critical IDs are found, we can stop early
+                if (state.cartId && state.serviceItemId && state.bookableTimeId && state.staffVariantId) {
+                    break;
+                }
+                
+            } catch (e) {
+                // Ignore tool messages that are not valid JSON or don't contain key state info
+            }
+        }
     }
 
-    // Try parsing natural date
-    try {
-      const parsed = new Date(dateInput);
-      if (!isNaN(parsed.getTime())) {
-        return parsed.toISOString().split('T')[0];
-      }
-    } catch {}
-
-    return dateInput;
+    // Format the state into a concise string for the LLM
+    const summary = Object.entries(state)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(', ');
+        
+    return summary;
   }
 
+  // Function for context management using programmatic state extraction
+  private async pruneHistoryForState(sessionId: string): Promise<void> {
+    const history = this.conversationHistory[sessionId];
+    const PRUNE_THRESHOLD = 20; // Prune if history is too long (e.g., more than 20 messages)
+
+    // Check if pruning is necessary and we have at least the System Prompt and the first User Message
+    if (history.length > PRUNE_THRESHOLD && history.length > 2) {
+        console.log(`🧹 Pruning history: ${history.length} messages. Programmatically summarizing state...`);
+        
+        // Programmatically extract the state
+        const summary = this.extractStateFromHistory(history);
+        
+        // Only prune if we successfully extracted critical state information
+        if (!summary) {
+            console.log('⚠️ Pruning skipped: No critical state IDs found to summarize.');
+            return;
+        }
+
+        console.log('✅ State Summarized:', summary);
+
+        // Rebuild the history: System Prompt + State Summary + Current User Message
+        // The current user's message is the last element in the array
+        const currentUserMessage = history[history.length - 1]; 
+
+        this.conversationHistory[sessionId] = [
+            this.buildSystemPrompt(), // The latest system rules
+            { 
+                role: 'user', 
+                content: `[SYSTEM MEMORY PRUNING]: The established booking state is: ${summary}` 
+            },
+            currentUserMessage // The message that needs to be addressed next
+        ];
+        
+        console.log(`✂️ History pruned. New length: ${this.conversationHistory[sessionId].length}`);
+    }
+  }
+
+
+  // The simplified, AI-driven getResponse function
   async getResponse(userMessage: string, sessionId = 'default') {
     if (!this.conversationHistory[sessionId]) {
-      this.conversationHistory[sessionId] = [
-        {
-          role: 'system',
-          content: `You are BLVD Appointment Booking Assistant. Help users book appointments naturally and flexibly.
-          
-          WORKFLOW:
-          1. Always fetch locations first (mandatory)
-          2. Match or ask for location
-          3. Create cart with location
-          4. Match or ask for service
-          5. Add service to cart
-          6. Match or ask for date
-          7. Match or ask for time
-          8. Reserve time slot
-          9. Match or ask for esthetician
-          10. Show summary and confirm
-          
-          RULES:
-          - Always validate user input against real data from MCP tools
-          - If user provides info upfront, validate and auto-proceed when possible
-          - If info is invalid or not found, show available options
-          - Keep responses concise and helpful
-          - Never skip the getLocations step
-          - Never use fake or placeholder data
-          `,
-        },
-      ];
+      // Initialize with the comprehensive system prompt
+      this.conversationHistory[sessionId] = [this.buildSystemPrompt()];
     }
 
+    // Add the user's latest message to the history
     this.conversationHistory[sessionId].push({ role: 'user', content: userMessage });
-
-    // Extract intent from user message
-    const intent = await this.extractBookingIntent(userMessage);
-    console.log('🧠 Extracted Intent:', intent);
-// 🧠 Merge with previous session intent memory
-const prevIntent =
-  this.conversationHistory[sessionId + '_intent'] || {};
-
-const mergedIntent = { ...prevIntent, ...intent };
-
-// Save merged intent back into memory
-this.conversationHistory[sessionId + '_intent'] = mergedIntent;
-
-console.log(`🧠 Merged Intent: ${JSON.stringify(mergedIntent, null, 2)}`);
-
-    // ========================================
-    // STEP 1: Always fetch locations first (MANDATORY)
-    // ========================================
-    let locations = (this as any).conversationHistory[sessionId + '_locations'];
     
-    if (!locations) {
+    // CRITICAL: Check and prune history before starting the main loop
+    await this.pruneHistoryForState(sessionId);
+
+    let response: OpenAI.Chat.Completions.ChatCompletion = null as any;
+    // Set a loop limit to prevent runaway function calls
+    for (let i = 0; i < 15; i++) {
+      console.log(`\n➡️ LLM Call ${i + 1}: Sending ${this.conversationHistory[sessionId].length} messages...`);
+
       try {
-        const result: any = await this.mcpClient.callTool({
-          name: 'getLocations',
-          arguments: {},
+        response = await this.openai.chat.completions.create({
+          model: 'gpt-4o-mini', // The model must support tool-calling
+          messages: this.conversationHistory[sessionId],
+          tools: this.getBookingTools(), // Provide all available MCP functions
+          tool_choice: 'auto', // Let the AI decide if a tool is needed
         });
-
-        const text = result?.content?.[0]?.text || '[]';
-        const parsed = JSON.parse(text);
-        locations = Array.isArray(parsed) ? parsed : parsed.locations || [];
-        (this as any).conversationHistory[sessionId + '_locations'] = locations;
-
-        if (!locations.length) {
-          return { reply: { role: 'assistant', content: 'Sorry, no locations are available at the moment.' } };
-        }
-      } catch (err) {
-        console.error('❌ getLocations failed:', err);
-        return { reply: { role: 'assistant', content: 'Failed to fetch locations. Please try again.' } };
+      } catch (error) {
+        console.error('❌ OpenAI API Call Failed:', error);
+        return { reply: { role: 'assistant', content: 'I apologize, there was an error connecting to my core services. Please try again in a moment.' } };
       }
-    }
 
-    // ========================================
-    // STEP 2: Handle location selection
-    // ========================================
-    let selectedLocation = (this as any).conversationHistory[sessionId + '_selectedLocation'];
+      const message = response.choices[0].message;
 
-    if (!selectedLocation) {
-      // Check if user provided location in their message
-      if (mergedIntent.location) {
-        const match = this.findBestMatch(mergedIntent.location, locations, 'name');
-        if (match) {
-          selectedLocation = match;
-          (this as any).conversationHistory[sessionId + '_selectedLocation'] = selectedLocation;
-          delete (this as any).conversationHistory[sessionId + '_locations'];
-          console.log('✅ Auto-matched location:', selectedLocation.name);
-        } else {
-          // Location mentioned but not found
-          const list = locations.map((l: any, i: number) => `${i + 1}. ${l.name}`).join('\n');
-          return {
-            reply: {
-              role: 'assistant',
-              content: `I couldn't find "${intent.location}". Here are the available locations:\n${list}\n\nPlease choose one by typing the number or name.`,
-            },
-          };
-        }
-      } else {
-        // No location mentioned, show options
-        const list = locations.map((l: any, i: number) => `${i + 1}. ${l.name}`).join('\n');
-        return {
-          reply: {
-            role: 'assistant',
-            content: `Hello! Here are our available locations:\n${list}\n\nPlease choose one by typing the number or name.`,
-          },
-        };
-      }
-    }
+      if (message.tool_calls) {
+        // --- AI wants to call a function ---
+        this.conversationHistory[sessionId].push(message); // Save AI's decision to call a tool
+        console.log(`⚙️ Tool Call(s) requested: ${message.tool_calls.map((tc :any)=> tc.function.name).join(', ')}`);
 
-    // ========================================
-    // STEP 3: Create cart if not exists
-    // ========================================
-    let cartId = (this as any).conversationHistory[sessionId + '_cartId'];
-
-    if (!cartId) {
-      try {
-        const cartResult: any = await this.mcpClient.callTool({
-          name: 'createAppointmentCart',
-          arguments: { locationId: selectedLocation.id },
-        });
-
-        const cartText = cartResult?.content?.[0]?.text;
-        const cartData = JSON.parse(cartText || '{}');
-        cartId = cartData?.createCart?.cart?.id || cartData?.cartId;
-        
-        if (!cartId) throw new Error('No cartId returned');
-        
-        (this as any).conversationHistory[sessionId + '_cartId'] = cartId;
-        console.log('✅ Cart created:', cartId);
-      } catch (err) {
-        console.error('❌ createAppointmentCart failed:', err);
-        return { reply: { role: 'assistant', content: 'Failed to create booking cart. Please try again.' } };
-      }
-    }
-
-    // ========================================
-    // STEP 4: Handle service selection
-    // ========================================
-    let selectedService = (this as any).conversationHistory[sessionId + '_selectedService'];
-
-    if (!selectedService) {
-      // Fetch available services if not already fetched
-      let services = (this as any).conversationHistory[sessionId + '_services'];
-      
-      if (!services) {
-        try {
-          const svcResult: any = await this.mcpClient.callTool({
-            name: 'availableServices',
-            arguments: { cartId },
-          });
-
-          let svcText = svcResult?.content?.[0]?.text;
-          let svcData = typeof svcText === 'string' ? JSON.parse(svcText) : svcText;
-          const excluded = ['Memberships', 'packages', 'products', 'Gift Cards'];
-
-          services = svcData?.cart?.availableCategories
-            ?.filter((c: any) => !excluded.includes(c?.name))
-            ?.flatMap((c: any) => c?.availableItems || []) || [];
-
-          (this as any).conversationHistory[sessionId + '_services'] = services;
-
-          if (!services.length) {
-            return { reply: { role: 'assistant', content: `No services available at ${selectedLocation.name}.` } };
+        for (const toolCall of message.tool_calls) {
+          // --- Type Narrowing: only handle "function" type tool calls ---
+          if (toolCall.type !== 'function') {
+            console.warn(`⚠️ Skipping unsupported tool call type: ${toolCall.type}`);
+            continue;
           }
-        } catch (err) {
-          console.error('❌ availableServices failed:', err);
-          return { reply: { role: 'assistant', content: 'Failed to fetch services. Please try again.' } };
-        }
-      }
-      console.log('🧠 Extracted Intent:', intent);
-
-      
-      console.log("intent service",intent.service);
-      
-      // Check if user provided service in their message
-      if (mergedIntent.service) {
-        const match = this.findBestMatch(mergedIntent.service, services, 'name');
-        if (match) {
-          selectedService = match;
-          (this as any).conversationHistory[sessionId + '_selectedService'] = selectedService;
-          delete (this as any).conversationHistory[sessionId + '_services'];
-          console.log('✅ Auto-matched service:', selectedService.name);
-          
-          // Add service to cart immediately
+        
+          const funcName = toolCall.function.name;
+          let funcArgs: any;
+          let toolResultContent: string;
+        
           try {
-            const result = await this.mcpClient.callTool({
-              name: 'addServiceToCart',
-              arguments: { cartId, serviceId: selectedService.id },
+            // --- Parse arguments safely ---
+            funcArgs = JSON.parse(toolCall.function.arguments || '{}');
+            console.log(`🛠️ Executing MCP Tool: ${funcName}`);
+            console.log(`📦 Arguments: ${JSON.stringify(funcArgs, null, 2)}`);
+        
+            // --- Execute the tool via MCP client ---
+            const result: any = await this.mcpClient.callTool({
+              name: funcName,
+              arguments: funcArgs,
             });
+            console.log(JSON.stringify(result, null, 2));
 
-            const selectedServiceList = JSON.parse(result?.content?.[0]?.text || '[]');
-            const selectedServiceId = selectedServiceList?.addCartSelectedBookableItem?.cart?.selectedItems?.[0]?.id;
-
-            if (!selectedServiceId) throw new Error('No selectedServiceId returned');
-
-            (this as any).conversationHistory[sessionId + '_selectedServiceId'] = selectedServiceId;
-            console.log('✅ Service added to cart:', selectedServiceId);
-            
-            // Don't return here - continue to date selection below
-          } catch (err) {
-            console.error('❌ addServiceToCart failed:', err);
-            return { reply: { role: 'assistant', content: `Couldn't add ${selectedService.name} to cart. Please try again.` } };
-          }
-        } else {
-          // Service mentioned but not found
-          const list = services.map((s: any, i: number) => `${i + 1}. ${s.name}`).join('\n');
-          return {
-            reply: {
-              role: 'assistant',
-              content: `I couldn't find "${intent.service}". Here are the available services at ${selectedLocation.name}:\n${list}\n\nPlease choose one by typing the number or name.`,
-            },
-          };
-        }
-      } else {
-        // No service mentioned, show options
-        const list = services.map((s: any, i: number) => `${i + 1}. ${s.name}`).join('\n');
-        return {
-          reply: {
-            role: 'assistant',
-            content: `Here are the available services at ${selectedLocation.name}:\n${list}\n\nPlease choose one by typing the number or name.`,
-          },
-        };
-      }
-    }
-
-    // ========================================
-    // STEP 5: Handle date selection
-    // ========================================
-    let selectedDate = (this as any).conversationHistory[sessionId + '_selectedDate'];
-
-    if (!selectedDate) {
-      let bookableDates = (this as any).conversationHistory[sessionId + '_bookableDates'];
-
-      if (!bookableDates) {
-        try {
-          const today = new Date();
-          const lower = today.toISOString().split('T')[0];
-          const upper = new Date(today.getTime() + 7 * 86400000).toISOString().split('T')[0];
-
-          const result: any = await this.mcpClient.callTool({
-            name: 'cartBookableDates',
-            arguments: { cartId, searchRangeLower: lower, searchRangeUpper: upper },
-          });
-
-          bookableDates = JSON.parse(result?.content?.[0]?.text || '[]');
-          (this as any).conversationHistory[sessionId + '_bookableDates'] = bookableDates;
-
-          if (!bookableDates.length) {
-            return { reply: { role: 'assistant', content: 'No available dates in the next 7 days. Please try again later.' } };
-          }
-        } catch (err) {
-          console.error('❌ cartBookableDates failed:', err);
-          return { reply: { role: 'assistant', content: 'Failed to fetch available dates. Please try again.' } };
-        }
-      }
-
-      // Check if user provided date in their message
-      if (mergedIntent.date) {
-        const parsedDate = this.parseDate(mergedIntent.date);
-        const match = bookableDates.find((d: string) => d === parsedDate || d.includes(parsedDate));
+            // --- Extract and stringify result for LLM context ---
+            toolResultContent = result?.content?.[0]?.text || '{}';
+            console.log(`✅ Tool ${funcName} executed. Result length: ${toolResultContent.length}`);
+          } catch (error: any) {
+            // --- Handle tool call or execution errors gracefully ---
+            console.error(`❌ Tool ${funcName} failed:`, error.message);
         
-        if (match) {
-          selectedDate = match;
-          (this as any).conversationHistory[sessionId + '_selectedDate'] = selectedDate;
-          delete (this as any).conversationHistory[sessionId + '_bookableDates'];
-          console.log('✅ Auto-matched date:', selectedDate);
-          
-          // Don't return here - continue to time selection below
-        } else {
-          // Date mentioned but not available
-          const list = bookableDates.map((d: string, i: number) => `${i + 1}. ${d}`).join('\n');
-          return {
-            reply: {
-              role: 'assistant',
-              content: `"${mergedIntent.date}" is not available. Here are the available dates:\n${list}\n\nPlease choose one by typing the number or date.`,
-            },
-          };
-        }
-      } else {
-        // No date mentioned, show options
-        const list = bookableDates.map((d: string, i: number) => `${i + 1}. ${d}`).join('\n');
-        return {
-          reply: {
-            role: 'assistant',
-            content: `Great! Here are the available dates for ${selectedService.name}:\n${list}\n\nPlease choose one by typing the number or date.`,
-          },
-        };
-      }
-    }
-
-    // ========================================
-    // STEP 6: Handle time selection
-    // ========================================
-    let selectedTimeSlot = (this as any).conversationHistory[sessionId + '_selectedTimeSlot'];
-
-    if (!selectedTimeSlot) {
-      let bookableTimes = (this as any).conversationHistory[sessionId + '_bookableTimes'];
-
-      if (!bookableTimes) {
-        try {
-          const result = await this.mcpClient.callTool({
-            name: 'cartBookableTimes',
-            arguments: { cartId, searchDate: selectedDate },
-          });
-
-          bookableTimes = JSON.parse(result?.content?.[0]?.text || '[]');
-          (this as any).conversationHistory[sessionId + '_bookableTimes'] = bookableTimes;
-
-          if (!bookableTimes.length) {
-            return { reply: { role: 'assistant', content: `No available times on ${selectedDate}. Please choose another date.` } };
-          }
-        } catch (err) {
-          console.error('❌ cartBookableTimes failed:', err);
-          return { reply: { role: 'assistant', content: 'Failed to fetch available times. Please try again.' } };
-        }
-      }
-
-      // Check if user provided time in their message
-      if (mergedIntent.time) {
-        // Match time (flexible: "6am", "06:00", "6:00 AM", etc.)
-        const match = bookableTimes.find((slot: any) => {
-          const slotTime = new Date(slot.startTime);
-          const hourMin = slotTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-          const hour12 = slotTime.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true }).toLowerCase();
-          
-          return hourMin.includes(mergedIntent.time!) || 
-                 hour12.includes(mergedIntent.time!.toLowerCase()) ||
-                 slot.startTime.includes(mergedIntent.time!);
-        });
-
-        if (match) {
-          selectedTimeSlot = match;
-          (this as any).conversationHistory[sessionId + '_selectedTimeSlot'] = selectedTimeSlot;
-          delete (this as any).conversationHistory[sessionId + '_bookableTimes'];
-          console.log('✅ Auto-matched time:', selectedTimeSlot.startTime);
-
-          // Reserve the time slot
-          try {
-            await this.mcpClient.callTool({
-              name: 'reserveCartBookableItems',
-              arguments: { cartId, bookableTimeId: selectedTimeSlot.id },
+            toolResultContent = JSON.stringify({
+              error: `Function ${funcName} failed or returned invalid data.`,
+              details: error.message,
+              parametersUsed: funcArgs,
             });
-            console.log('✅ Time slot reserved');
-            
-            // Don't return here - continue to staff selection below
-          } catch (err) {
-            console.error('❌ reserveCartBookableItems failed:', err);
-            return { reply: { role: 'assistant', content: 'Failed to reserve time slot. Please try again.' } };
           }
-        } else {
-          // Time mentioned but not available
-          const list = bookableTimes.map((t: any, i: number) => 
-            `${i + 1}. ${new Date(t.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-          ).join('\n');
-          return {
-            reply: {
-              role: 'assistant',
-              content: `"${intent.time}" is not available on ${selectedDate}. Here are the available times:\n${list}\n\nPlease choose one by typing the number.`,
-            },
-          };
-        }
-      } else {
-        // No time mentioned, show options
-        const list = bookableTimes.map((t: any, i: number) => 
-          `${i + 1}. ${new Date(t.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-        ).join('\n');
-        return {
-          reply: {
-            role: 'assistant',
-            content: `Here are the available times on ${selectedDate}:\n${list}\n\nPlease choose one by typing the number.`,
-          },
-        };
-      }
-    }
-
-    // ========================================
-    // STEP 7: Handle esthetician selection
-    // ========================================
-    let selectedStaff = (this as any).conversationHistory[sessionId + '_selectedStaff'];
-
-    if (!selectedStaff) {
-      let staffList = (this as any).conversationHistory[sessionId + '_staffList'];
-      const selectedServiceId = (this as any).conversationHistory[sessionId + '_selectedServiceId'];
-
-      if (!staffList) {
-        try {
-          const staffResult: any = await this.mcpClient.callTool({
-            name: 'cartBookableStaffVariants',
-            arguments: { id: cartId, itemId: selectedServiceId, bookableTimeId: selectedTimeSlot.id },
+        
+          // --- Send result back to OpenAI as a "tool" role message ---
+          this.conversationHistory[sessionId].push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: toolResultContent,
           });
-
-          let staffText = staffResult?.content?.[0]?.text;
-          let staffData: any;
-          try {
-            staffData = typeof staffText === 'string' ? JSON.parse(staffText) : staffText;
-          } catch {
-            staffData = [];
-          }
-
-          staffList = Array.isArray(staffData)
-            ? staffData
-            : staffData?.cartBookableStaffVariants || staffData?.bookableStaffVariants || [];
-
-          (this as any).conversationHistory[sessionId + '_staffList'] = staffList;
-
-          if (!staffList.length) {
-            return { reply: { role: 'assistant', content: 'No estheticians available for this time slot. Please try another time.' } };
-          }
-        } catch (err) {
-          console.error('❌ cartBookableStaffVariants failed:', err);
-          return { reply: { role: 'assistant', content: 'Failed to fetch available estheticians. Please try again.' } };
         }
-      }
-
-      // Check if user provided esthetician preference
-      if (intent.esthetician) {
-        const match = this.findBestMatch(intent.esthetician, staffList, 'displayName') ||
-                      staffList.find((s: any) => 
-                        `${s.staff?.firstName || ''} ${s.staff?.lastName || ''}`.toLowerCase().includes(intent.esthetician!.toLowerCase())
-                      );
-
-        if (match) {
-          selectedStaff = match;
-          (this as any).conversationHistory[sessionId + '_selectedStaff'] = selectedStaff;
-          delete (this as any).conversationHistory[sessionId + '_staffList'];
-          console.log('✅ Auto-matched staff:', selectedStaff.staff?.displayName);
-          
-          // Don't return here - continue to update cart and show summary below
-        }
-      }
-
-      if (!selectedStaff) {
-        // Show staff options
-        const list = staffList.map((s: any, i: number) =>
-          `${i + 1}. ${s.staff?.displayName || `${s.staff?.firstName || ''} ${s.staff?.lastName || ''}`.trim() || 'Unnamed'}`
-        ).join('\n');
-
-        return {
-          reply: {
-            role: 'assistant',
-            content: `Here are the available estheticians:\n${list}\n\nPlease choose one by typing the number or name.`,
-          },
-        };
-      }
-
-      // Update cart with selected staff
-      try {
-        await this.mcpClient.callTool({
-          name: 'updateCartSelectedBookableItem',
-          arguments: {
-            cartId,
-            itemId: selectedServiceId,
-            staffVariantId: selectedStaff.id,
-          },
-        });
-        console.log('✅ Staff assigned to cart');
-      } catch (err) {
-        console.error('❌ updateCartSelectedBookableItem failed:', err);
-        return { reply: { role: 'assistant', content: 'Failed to assign esthetician. Please try again.' } };
+        
+        // Loop again: The next iteration will allow the AI to read the tool result and decide the next step (another tool or final text reply)
+      } else {
+        // --- AI responds with final text ---
+        this.conversationHistory[sessionId].push(message);
+        console.log('🗣️ LLM replied with text. End of turn.');
+        return { reply: message };
       }
     }
 
-    // ========================================
-    // STEP 8: Show summary and confirm
-    // ========================================
-    try {
-      const summaryResult: any = await this.mcpClient.callTool({
-        name: 'getCartSummary',
-        arguments: { cartId },
-      });
-
-      const summaryText = summaryResult?.content?.[0]?.text || '{}';
-      let summaryData: any;
-      try {
-        summaryData = JSON.parse(summaryText);
-      } catch {
-        summaryData = {};
-      }
-
-      const staffName = selectedStaff.staff?.displayName ||
-        `${selectedStaff.staff?.firstName || ''} ${selectedStaff.staff?.lastName || ''}`.trim();
-
-      const time = new Date(selectedTimeSlot.startTime).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-
-      let reply = `✅ **Appointment Summary**\n\n`;
-      reply += `📍 Location: ${selectedLocation.name}\n`;
-      reply += `💆 Service: ${selectedService.name}\n`;
-      reply += `📅 Date: ${selectedDate}\n`;
-      reply += `🕒 Time: ${time}\n`;
-      reply += `👤 Esthetician: ${staffName}\n\n`;
-
-      if (summaryData?.summary) {
-        reply += `💰 Subtotal: $${(summaryData.summary.subtotal / 100).toFixed(2)}\n`;
-        reply += `💰 Tax: $${(summaryData.summary.taxAmount / 100).toFixed(2)}\n`;
-        reply += `💰 **Total: $${(summaryData.summary.total / 100).toFixed(2)}**\n\n`;
-      }
-
-      reply += `Would you like to confirm your appointment?`;
-
-      return { reply: { role: 'assistant', content: reply } };
-    } catch (err) {
-      console.error('❌ getCartSummary failed:', err);
-      return { reply: { role: 'assistant', content: 'Failed to fetch cart summary. Please try again.' } };
-    }
+    // Safety fallback if the loop limit is reached
+    return { reply: { role: 'assistant', content: 'I seem to be stuck in a complex sequence. Could you please simplify your request or state the detail you want to change?' } };
   }
 }
