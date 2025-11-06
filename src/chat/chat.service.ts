@@ -18,11 +18,20 @@ interface BookingIntent {
 export class ChatService {
   private openai: OpenAI;
   private mcpClient: Client;
+  public paymentToken: string | null = null;
+
   // conversationHistory now stores messages only; state is managed by the AI's reasoning.
   private conversationHistory: Record<string, OpenAI.Chat.Completions.ChatCompletionMessageParam[]> = {};
 
   constructor() {
     this.initialize();
+  }
+
+
+  // Optional: helper method to set the token
+  setPaymentToken(token: string) {
+    console.log('💳 Frontend token saved in ChatService:', token);
+    this.paymentToken = token;
   }
 
   private async initialize() {
@@ -208,6 +217,28 @@ export class ChatService {
       {
         type: 'function',
         function: {
+          name: 'addCartCardPaymentMethod',
+          description: 'Attaches a tokenized card payment method to an existing Boulevard cart.',
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: { type: 'string', description: 'Existing cart ID.' },
+              token: { type: 'string', description: 'Card token returned from tokenizeCard tool.' },
+              select: {
+                type: 'boolean',
+                description: 'Whether to set this card as the selected payment method.',
+                default: true,
+              },
+            },
+            required: ['cartId', 'token'],
+          },
+        },
+      },
+      
+
+      {
+        type: 'function',
+        function: {
           name: 'getCartSummary',
           description: 'Retrieves the final summary and total price of the cart. Use before asking for final confirmation.',
           parameters: {
@@ -300,6 +331,14 @@ If the API returns \`105000\`, display **$1,050.00**.
     * ⚠️ **NEVER EVER** use a truncated Cart ID (for example, **\`urn:blvd:Cart:\`**).  
       You **MUST** use the complete ID (for example, **\`urn:blvd:Cart:ac67fb72-8c8f-4cef-b992-b9f9ffdfa510\`**) when calling **\`setClientOnCart\`**, **\`getCartSummary\`**, or **\`confirmBooking\`**.
     * If the Cart ID is missing, incomplete, or corrupted, you **MUST** inform the user that the cart session is invalid and that the booking process must restart.
+16.  **PAYMENT TOKEN HANDLING RULE:**
+- When a payment token becomes available (stored in variable \`paymentToken\`), you MUST immediately call the \`addCartCardPaymentMethod\` tool with:
+  - cartId: the current cart ID
+  - token: the value of paymentToken
+  - select: true
+- After successfully adding the payment method, call \`getCartSummary\` to show the total.
+- Then, if the user has already confirmed all other booking details, you may call \`confirmBooking\`.
+
 
 `,
   };
@@ -500,7 +539,7 @@ If the API returns \`105000\`, display **$1,050.00**.
         // --- AI responds with final text ---
         let  parsed:any = message;
         this.conversationHistory[sessionId].push(message);
-        if (funcName === 'getLocations') {
+        if (funcName === 'setClientOnCart') {
           //  try {
                parsed = message;//JSON.parse(toolResultContent || '{}');
               parsed.frontendAction = {

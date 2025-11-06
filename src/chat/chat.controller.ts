@@ -10,4 +10,22 @@ export class ChatController {
     const response = await this.chatService.getResponse(message);
     return response; // ✅ don’t wrap it again
   }
+
+  @Post('receive-token')
+  async receiveToken(@Body('token') token: string) {
+
+    this.chatService.setPaymentToken(token);
+
+    if (!token) {
+      console.log('No token from frontend:', token);
+
+      return { success: false, message: 'No token received.' };
+    }
+
+    console.log('💳 Received token from frontend:', token);
+
+    return { success: true, message: 'Token received successfully.' };
+  }
+
+  
 }
