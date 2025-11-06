@@ -420,6 +420,7 @@ If the API returns \`105000\`, display **$1,050.00**.
 
     let response: OpenAI.Chat.Completions.ChatCompletion = null as any;
     // Set a loop limit to prevent runaway function calls
+    let funcName:any;
     for (let i = 0; i < 15; i++) {
       console.log(`\n➡️ LLM Call ${i + 1}: Sending ${this.conversationHistory[sessionId].length} messages...`);
 
@@ -449,7 +450,7 @@ If the API returns \`105000\`, display **$1,050.00**.
             continue;
           }
         
-          const funcName = toolCall.function.name;
+           funcName = toolCall.function.name;
           let funcArgs: any;
           let toolResultContent: string;
         
@@ -466,8 +467,11 @@ If the API returns \`105000\`, display **$1,050.00**.
             });
             console.log(JSON.stringify(result, null, 2));
 
+            console.log("funcName >> ",funcName)
+
             // --- Extract and stringify result for LLM context ---
             toolResultContent = result?.content?.[0]?.text || '{}';
+
             console.log(`✅ Tool ${funcName} executed. Result length: ${toolResultContent.length}`);
           } catch (error: any) {
             // --- Handle tool call or execution errors gracefully ---
@@ -481,19 +485,37 @@ If the API returns \`105000\`, display **$1,050.00**.
           }
         
           // --- Send result back to OpenAI as a "tool" role message ---
-          this.conversationHistory[sessionId].push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: toolResultContent,
-          });
+         // setTimeout(()=>{
+            this.conversationHistory[sessionId].push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: toolResultContent,
+            });
+          //},500)
+          
         }
         
         // Loop again: The next iteration will allow the AI to read the tool result and decide the next step (another tool or final text reply)
       } else {
         // --- AI responds with final text ---
+        let  parsed:any = message;
         this.conversationHistory[sessionId].push(message);
-        console.log('🗣️ LLM replied with text. End of turn.');
-        return { reply: message };
+        if (funcName === 'getLocations') {
+          //  try {
+               parsed = message;//JSON.parse(toolResultContent || '{}');
+              parsed.frontendAction = {
+                type: 'SHOW_PAY_BUTTON',
+                checkoutUrl: 'https://blvd-chatbot.ostlive.com/checkout',
+              };
+              console.log("parsed >> ",parsed)
+             // toolResultContent = JSON.stringify(parsed);
+            //  console.log('💳 Added frontendAction to toolResultContent',toolResultContent);
+            // } catch (err) {
+            //   console.error('❌ Failed to parse toolResultContent as JSON:', err);
+            // }
+          }
+        console.log('🗣️ LLM replied with text. End of turn.',message);
+        return { reply: parsed };
       }
     }
 
