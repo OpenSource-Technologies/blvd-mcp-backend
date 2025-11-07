@@ -21,7 +21,8 @@ export class ChatService {
   private openai: OpenAI;
   private mcpClient: Client;
   public paymentToken: string | null = null;
-  
+  email:any;
+  totalAmount:any;
   private sessionState: Record<string, {
     cartId?: string;
     serviceItemId?: string;
@@ -406,7 +407,9 @@ You are a highly flexible, intelligent, and conversational appointment booking A
 5.  **Booking Flow Order:** The logical sequence is strict: **Location → Create Cart → Service ID Acquisition → CRITICAL: Service Commitment (Add to Cart) → Date → Time → CRITICAL: Reserve Time Slot → Staff → Summary & Confirmation.** Only call a function when the required data for that step is missing or needs validation/update.
   * **CRITICAL STEP CHAINING 1 (Service):** After successfully running the \`availableServices\` tool, you **MUST immediately take a conversational turn** to present the options to the user before proceeding. You **MUST NOT** call \`addServiceToCart\` in the same turn.
   * **CRITICAL STEP CHAINING 2 (Time):** After successfully receiving a list of available times from \`cartBookableTimes\`, you **must immediately** call \`reserveCartBookableItems\` using the chosen time ID to secure the slot before proceeding to staff selection. Staff cannot be selected until a time slot is reserved.
-  * **CRITICAL STEP CHAINING 3 (Staff/Time Re-Reservation - UNCONDITIONAL, IMMEDIATE CHAIN):** After successfully completing a tool call that updates the staff selection (\`updateCartSelectedBookableItem\`), the **ONLY VALID NEXT ACTION** is to call **\`reserveCartBookableItems\`** in the subsequent turn. You **MUST NOT** take a conversational turn, or call any other function (especially **\`setClientOnCart\`**), until this **\`reserveCartBookableItems\`** re-reservation is complete. This is mandatory to confirm the staff assignment.
+  * **CRITICAL STEP CHAINING 3 (Staff/Time Re-Reservation - ABSOLUTELY MANDATORY CHAIN):** After a staff member is selected, the tool chain **MUST** be: **\`updateCartSelectedBookableItem\` $\rightarrow$ \`reserveCartBookableItems\`**. You **MUST NOT** proceed to \`setClientOnCart\`  or any other step until **\`reserveCartBookableItems\`** has been successfully called *immediately* after **\`updateCartSelectedBookableItem\`**. This sequence is **non-negotiable** for confirming the staff/time selection.  
+
+
 6.  **CRITICAL DATE CONSTRAINT (USE USER'S DATE):** **If the user explicitly provides a date (e.g., '7 nov'), you MUST use that date (YYYY-MM-DD format) for all subsequent date-related tool calls** (\`cartBookableDates\`, \`cartBookableTimes\`). You must only default to starting the search from **today's date, ${getTodayDate()}**, if *no* specific date is mentioned by the user. **NEVER** override the user's specific future date with the current date.
 7.  **CRITICAL ID CLARIFICATION:** When identifying the service item ID for **\`cartBookableStaffVariants\`** or **\`updateCartSelectedBookableItem\`**, you must use the **top-level \`id\`** of the object in the cart's \`selectedItems\` array. **NEVER** use the nested \`item.id\` field, as it is the wrong identifier for booking staff.
 8.  **Error Handling:** If a function call returns an error or an empty list (e.g., no available times), clearly inform the user and ask them to choose a different option.
@@ -625,6 +628,12 @@ try {
     : result?.content?.[0]?.text || result || {};
 } catch {}
 
+
+console.log("toolData",toolData?.updateCart?.cart?.clientInformation?.email);
+this.email=toolData?.updateCart?.cart?.clientInformation?.email;
+this.totalAmount=toolData.addCartSelectedBookableItem?.cart?.summary?.total ?? 150;
+console.log("toolamt",this.totalAmount);
+
 // --- Update sessionState ---
 if (!this.sessionState[sessionId]) this.sessionState[sessionId] = {};
 
@@ -697,7 +706,7 @@ if (toolData.selectedBookableItem?.id) {
                parsed = message;//JSON.parse(toolResultContent || '{}');
               parsed.frontendAction = {
                 type: 'SHOW_PAY_BUTTON',
-                checkoutUrl: 'https://blvd-chatbot.ostlive.com/checkout?email=rekha@yopmail.com&amount=40',
+                checkoutUrl: `https://blvd-chatbot.ostlive.com/checkout?email=${this.email}&amount=${this.totalAmount}`
               };
              // toolResultContent = JSON.stringify(parsed);
             //  console.log('💳 Added frontendAction to toolResultContent',toolResultContent);
