@@ -697,7 +697,7 @@ if (toolData.selectedBookableItem?.id) {
                parsed = message;//JSON.parse(toolResultContent || '{}');
               parsed.frontendAction = {
                 type: 'SHOW_PAY_BUTTON',
-                checkoutUrl: 'https://blvd-chatbot.ostlive.com/checkout',
+                checkoutUrl: 'https://blvd-chatbot.ostlive.com/checkout?email=rekha@yopmail.com&amount=40',
               };
              // toolResultContent = JSON.stringify(parsed);
             //  console.log('💳 Added frontendAction to toolResultContent',toolResultContent);
