@@ -28,6 +28,8 @@ export class ChatService {
     serviceItemId?: string;
     bookableTimeId?: string;
     staffVariantId?: string;
+    clientEmail?:string;
+    totalAmount?;
   }> = {};
 
 
@@ -620,35 +622,51 @@ If the API returns \`105000\`, display **$1,050.00**.
 
             console.log("funcName >> ",funcName)
 
-// Parse the result safely
-let toolData: any = {};
-try {
-  toolData = typeof result?.content?.[0]?.text === 'string'
-    ? JSON.parse(result.content[0].text)
-    : result?.content?.[0]?.text || result || {};
-} catch {}
+              // Parse the result safely
+              let toolData: any = {};
+              try {
+                toolData = typeof result?.content?.[0]?.text === 'string'
+                  ? JSON.parse(result.content[0].text)
+                  : result?.content?.[0]?.text || result || {};
+              } catch {}
 
 
-console.log("toolData",toolData?.updateCart?.cart?.clientInformation?.email);
-this.email=toolData?.updateCart?.cart?.clientInformation?.email;
-this.totalAmount=toolData.addCartSelectedBookableItem?.cart?.summary?.total ?? 150;
-console.log("toolamt",this.totalAmount);
+              console.log("toolData",toolData?.updateCart?.cart?.clientInformation?.email);
 
-// --- Update sessionState ---
-if (!this.sessionState[sessionId]) this.sessionState[sessionId] = {};
 
-// Capture Cart ID from tool output
-if (toolData.cartId) this.sessionState[sessionId].cartId = toolData.cartId;
 
-// Capture other critical IDs if present
-if (toolData.selectedItems?.length) {
-  const item = toolData.selectedItems[0];
-  if (item.id) this.sessionState[sessionId].serviceItemId = item.id;
-  if (item.staffVariantId) this.sessionState[sessionId].staffVariantId = item.staffVariantId;
-}
-if (toolData.selectedBookableItem?.id) {
-  this.sessionState[sessionId].bookableTimeId = toolData.selectedBookableItem.id;
-}
+
+              // --- Update sessionState ---
+              if (!this.sessionState[sessionId]) this.sessionState[sessionId] = {};
+
+
+
+              if(toolData?.updateCart?.cart?.clientInformation?.email){
+                this.sessionState[sessionId].clientEmail =
+                toolData?.updateCart?.cart?.clientInformation?.email || 'guest@example.com';
+              }
+              if(toolData?.addCartSelectedBookableItem?.cart?.summary?.total){
+                this.sessionState[sessionId].totalAmount = toolData?.addCartSelectedBookableItem?.cart?.summary?.total/100;
+              }
+
+                
+                console.log("addcartselecteditem",toolData?.addCartSelectedBookableItem?.cart);
+                console.log("thistotalAmount", this.sessionState[sessionId].totalAmount);
+                
+
+
+              // Capture Cart ID from tool output
+              if (toolData.cartId) this.sessionState[sessionId].cartId = toolData.cartId;
+
+              // Capture other critical IDs if present
+              if (toolData.selectedItems?.length) {
+                const item = toolData.selectedItems[0];
+                if (item.id) this.sessionState[sessionId].serviceItemId = item.id;
+                if (item.staffVariantId) this.sessionState[sessionId].staffVariantId = item.staffVariantId;
+              }
+              if (toolData.selectedBookableItem?.id) {
+                this.sessionState[sessionId].bookableTimeId = toolData.selectedBookableItem.id;
+              }
 
 
 
@@ -702,11 +720,16 @@ if (toolData.selectedBookableItem?.id) {
         let  parsed:any = message;
         this.conversationHistory[sessionId].push(message);
         if (funcName === 'setClientOnCart') {
+          
+
+          console.log("thistotalAmount2", this.sessionState[sessionId].totalAmount);
+          
+
           //  try {
                parsed = message;//JSON.parse(toolResultContent || '{}');
               parsed.frontendAction = {
                 type: 'SHOW_PAY_BUTTON',
-                checkoutUrl: `https://blvd-chatbot.ostlive.com/checkout?email=${this.email}&amount=${this.totalAmount}`
+                checkoutUrl: `https://blvd-chatbot.ostlive.com/checkout?email=${this.sessionState[sessionId].clientEmail}&amount=${this.sessionState[sessionId].totalAmount}`
               };
              // toolResultContent = JSON.stringify(parsed);
             //  console.log('💳 Added frontendAction to toolResultContent',toolResultContent);
