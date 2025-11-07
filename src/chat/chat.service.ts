@@ -35,61 +35,110 @@ export class ChatService {
 
   constructor() {
     this.initialize();
-  }
+  }// Inside ChatService class:
 
-setPaymentToken(token: string, sessionId = 'default') {
+async setPaymentToken(token: string, sessionId = 'default'): Promise<any> {
   console.log('💳 Received token from frontend:', token);
-  
-  const cartId = this.sessionState[sessionId]?.cartId;
-  
-  console.log('💳 cartId :', cartId);
-  
-  const history = this.conversationHistory[sessionId];
-  this.paymentToken = token;
-  
-  if (!cartId) {
-    console.warn('⚠️ Cannot add payment method: Cart ID not found in session state.');
-    return;
+
+  console.log("timeid",this.sessionState[sessionId].bookableTimeId) 
+
+  const session = this.sessionState[sessionId];
+  const cartId = session?.cartId;
+  // const bookableTimeId = session?.bookableTimeId; // <-- Crucial ID for re-reservation
+  // console.log("timeid",session?.bookableTimeId) 
+
+
+
+  if (!cartId) { // Check for both critical IDs
+    console.warn('⚠️ Cannot proceed with payment: Cart ID');
+    // If the cart is missing, this is a terminal error for the session.
+    return { 
+      reply: { 
+        role: 'assistant', 
+        content: 'I am sorry, but the booking data is incomplete. The session may have expired. Please start the booking process again.'
+      } 
+    };
   }
 
-  (async () => {
-    try {
-      const result: any = await this.mcpClient.callTool({
-        name: 'addCartCardPaymentMethod',
-        arguments: {
-          cartId,
-          token: this.paymentToken,
-          select: true,
-        },
-      });
-      // console.log('✅ Payment method added:', result);
+  this.paymentToken = token;
 
-        // 3️⃣ Automatically checkout the cart
-        
-        
-        
+  try {
+    // 🛑 DEFENSIVE GUARDRAIL: RE-RESERVE BOOKABLE ITEMS 🛑
+    // Ensure the staff selection is confirmed and the time slot is reserved before checkout.
+    // This step acts as a safety net if the LLM missed the CRITICAL STEP CHAINING 3.
+    // console.log('🛡️ Pre-Checkout Check: Attempting to reserve bookable items...');
+    // const reserveResult: any = await this.mcpClient.callTool({
+    //   name: 'reserveCartBookableItems',
+    //   arguments: {
+    //     cartId: cartId,
+    //     bookableTimeId: bookableTimeId,
+    //   },
+    // });
+    // console.log('✅ Defensive Reserve successful:', JSON.stringify(reserveResult, null, 2));
 
-        
-        const checkoutResult: any = await this.mcpClient.callTool({
-          name: 'checkoutCart',
-          arguments: { cartId },
-        });
-        console.log('🛒 Cart checked out successfully:', checkoutResult);
+    // 1️⃣ Add payment method
+    await this.mcpClient.callTool({
+      name: 'addCartCardPaymentMethod',
+      arguments: { cartId, token: this.paymentToken, select: true },
+    });
 
-        
+    // 2️⃣ Checkout
+    const checkoutResult: any = await this.mcpClient.callTool({
+      name: 'checkoutCart',
+      arguments: { cartId },
+    });
+    // ... (rest of the successful checkout logic remains the same)
+    console.log('🛒 Cart checked out successfully:', checkoutResult);
+
+    // Parse checkout response
+    const checkoutData = JSON.parse(checkoutResult.content[0].text).checkoutCart;
+
+    const cart = checkoutData.cart;
+    const client = cart.clientInformation;
+    const location = cart.location;
+    const selectedItem = cart.selectedItems[0];
+    const staff = selectedItem.selectedStaffVariant?.staff?.displayName || 'assigned staff';
+    const serviceName = selectedItem.item?.name || selectedItem.id;
+    const dateTime = cart.startTime || 'scheduled time';
+    const totalUSD = (cart.summary.total ?? 0) / 100;
+    const formattedTotal = `$${totalUSD.toFixed(2)}`;
+
+    const startDate = new Date(cart.startTime);
+    const formattedDate = startDate.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    });
+    const formattedTime = startDate.toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      hour12: true 
+    });
 
 
-      const summary: any = await this.mcpClient.callTool({
-        name: 'getCartSummary',
-        arguments: { cartId },
-      });
-      // console.log('💰 Updated cart summary:', summary);
-    } catch (err: any) {
-      console.error('❌ Failed to add payment method:', err.message);
-    }
-  })();
+    // Build JSON response
+    const response = {
+      reply: {
+        role: 'assistant',
+        content: `Your appointment is now fully confirmed! Here are the final details:\n\n### Appointment Confirmation\n- **Date:** ${formattedDate}\n- **Time:** ${formattedTime}\n- **Service:** ${serviceName}\n- **Staff:** ${staff}\n- **Total Amount:** ${formattedTotal}\n\n### Client Details\n- **First Name:** ${client.firstName}\n- **Last Name:** ${client.lastName}\n- **Email:** ${client.email}\n- **Phone Number:** ${client.phoneNumber}\n\nIf you have any further questions or need anything else, feel free to ask! Thank you for choosing ${location.name}!`,
+        refusal: null,
+        annotations: [],
+      }
+    };
+
+    return response;
+
+  } catch (err: any) {
+    console.error('❌ Failed to add payment method or checkout:', err.message);
+    // Return a structured error response
+    return { 
+      reply: { 
+        role: 'assistant', 
+        content: `I apologize, but the payment or final booking step failed. Please ensure your card details are correct or try again. Error details: ${err.message}`
+      }
+    };
+  }
 }
-
   
   private async initialize() {
     // Ensure API Key is available
@@ -208,7 +257,7 @@ setPaymentToken(token: string, sessionId = 'default') {
         type: 'function',
         function: {
           name: 'reserveCartBookableItems',
-          description: 'Reserves the chosen time slot in the cart. Required after date/time selection. Requires cartId and bookableTimeId.',
+          description: '**MANDATORY AFTER STAFF SELECTION:** Reserves/confirms the chosen time slot and staff assignment. MUST be called immediately after updateCartSelectedBookableItem. This locks in the booking details.',
           parameters: {
             type: 'object',
             properties: {
@@ -357,6 +406,7 @@ You are a highly flexible, intelligent, and conversational appointment booking A
 5.  **Booking Flow Order:** The logical sequence is strict: **Location → Create Cart → Service ID Acquisition → CRITICAL: Service Commitment (Add to Cart) → Date → Time → CRITICAL: Reserve Time Slot → Staff → Summary & Confirmation.** Only call a function when the required data for that step is missing or needs validation/update.
   * **CRITICAL STEP CHAINING 1 (Service):** After successfully running the \`availableServices\` tool, you **MUST immediately take a conversational turn** to present the options to the user before proceeding. You **MUST NOT** call \`addServiceToCart\` in the same turn.
   * **CRITICAL STEP CHAINING 2 (Time):** After successfully receiving a list of available times from \`cartBookableTimes\`, you **must immediately** call \`reserveCartBookableItems\` using the chosen time ID to secure the slot before proceeding to staff selection. Staff cannot be selected until a time slot is reserved.
+  * **CRITICAL STEP CHAINING 3 (Staff/Time Re-Reservation - UNCONDITIONAL, IMMEDIATE CHAIN):** After successfully completing a tool call that updates the staff selection (\`updateCartSelectedBookableItem\`), the **ONLY VALID NEXT ACTION** is to call **\`reserveCartBookableItems\`** in the subsequent turn. You **MUST NOT** take a conversational turn, or call any other function (especially **\`setClientOnCart\`**), until this **\`reserveCartBookableItems\`** re-reservation is complete. This is mandatory to confirm the staff assignment.
 6.  **CRITICAL DATE CONSTRAINT (USE USER'S DATE):** **If the user explicitly provides a date (e.g., '7 nov'), you MUST use that date (YYYY-MM-DD format) for all subsequent date-related tool calls** (\`cartBookableDates\`, \`cartBookableTimes\`). You must only default to starting the search from **today's date, ${getTodayDate()}**, if *no* specific date is mentioned by the user. **NEVER** override the user's specific future date with the current date.
 7.  **CRITICAL ID CLARIFICATION:** When identifying the service item ID for **\`cartBookableStaffVariants\`** or **\`updateCartSelectedBookableItem\`**, you must use the **top-level \`id\`** of the object in the cart's \`selectedItems\` array. **NEVER** use the nested \`item.id\` field, as it is the wrong identifier for booking staff.
 8.  **Error Handling:** If a function call returns an error or an empty list (e.g., no available times), clearly inform the user and ask them to choose a different option.
@@ -385,8 +435,10 @@ If the API returns \`105000\`, display **$1,050.00**.
   * **If the user explicitly provided a time in their initial query (e.g., '9am'), and that time is available in the \`cartBookableTimes\` output, you MUST automatically reserve that time slot using \`reserveCartBookableItems\` in the next tool call without asking the user again.**
   * If the user provided a date but **NO time**, or if their specified time is **NOT available**, you **MUST** display the available time slots to the user in a clear, formatted list, and explicitly **ask the user to select their desired time**.
 
-14. **MANDATORY CLIENT DETAILS COLLECTION:**
-    * **After staff selection is complete, you MUST take a conversational turn to ask the user for their contact details (First Name, Last Name, Email, and Phone Number) before calling \`setClientOnCart\` or proceeding to final summary/payment.** You must obtain all four pieces of information before calling \`setClientOnCart\`.
+14. **MANDATORY CLIENT DETAILS COLLECTION (CRITICAL STOP AND CONVERSATIONAL REQUIREMENT):**
+    * **ABSOLUTE RULE:** After a successful **\`reserveCartBookableItems\`** call (whether from the initial time selection or the staff re-reservation), you **MUST STOP** the tool-calling loop and provide a **TEXT RESPONSE** to the user. This text response **MUST** ask the user to provide their First Name, Last Name, Email, and Phone Number.
+    * **NEVER EVER** call **\`setClientOnCart\`** until the user has supplied all four pieces of information in a single, subsequent message.    * **DO NOT** call **\`setClientOnCart\`** or **\`getCartSummary\`** until the user has provided all four required details in a subsequent message.
+
 15.  **🛑 CRITICAL CART ID INTEGRITY (CHECK FOR CORRUPTION) 🛑:**
     * The **Cart ID** is established *only* by the **\`createAppointmentCart\`** tool and always begins with **\`urn:blvd:Cart:\`**, followed by a long unique identifier.
     * ⚠️ **NEVER EVER** use a truncated Cart ID (for example, **\`urn:blvd:Cart:\`**).  
