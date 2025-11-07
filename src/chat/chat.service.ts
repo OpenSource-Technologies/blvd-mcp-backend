@@ -14,11 +14,21 @@ interface BookingIntent {
   esthetician?: string;
 }
 
+
+
 @Injectable()
 export class ChatService {
   private openai: OpenAI;
   private mcpClient: Client;
   public paymentToken: string | null = null;
+  
+  private sessionState: Record<string, {
+    cartId?: string;
+    serviceItemId?: string;
+    bookableTimeId?: string;
+    staffVariantId?: string;
+  }> = {};
+
 
   // conversationHistory now stores messages only; state is managed by the AI's reasoning.
   private conversationHistory: Record<string, OpenAI.Chat.Completions.ChatCompletionMessageParam[]> = {};
@@ -27,13 +37,60 @@ export class ChatService {
     this.initialize();
   }
 
-
-  // Optional: helper method to set the token
-  setPaymentToken(token: string) {
-    console.log('💳 Frontend token saved in ChatService:', token);
-    this.paymentToken = token;
+setPaymentToken(token: string, sessionId = 'default') {
+  console.log('💳 Received token from frontend:', token);
+  
+  const cartId = this.sessionState[sessionId]?.cartId;
+  
+  console.log('💳 cartId :', cartId);
+  
+  const history = this.conversationHistory[sessionId];
+  this.paymentToken = token;
+  
+  if (!cartId) {
+    console.warn('⚠️ Cannot add payment method: Cart ID not found in session state.');
+    return;
   }
 
+  (async () => {
+    try {
+      const result: any = await this.mcpClient.callTool({
+        name: 'addCartCardPaymentMethod',
+        arguments: {
+          cartId,
+          token: this.paymentToken,
+          select: true,
+        },
+      });
+      // console.log('✅ Payment method added:', result);
+
+        // 3️⃣ Automatically checkout the cart
+        
+        
+        
+
+        
+        const checkoutResult: any = await this.mcpClient.callTool({
+          name: 'checkoutCart',
+          arguments: { cartId },
+        });
+        console.log('🛒 Cart checked out successfully:', checkoutResult);
+
+        
+
+
+      const summary: any = await this.mcpClient.callTool({
+        name: 'getCartSummary',
+        arguments: { cartId },
+      });
+      // console.log('💰 Updated cart summary:', summary);
+    } catch (err: any) {
+      console.error('❌ Failed to add payment method:', err.message);
+    }
+  })();
+}
+
+  
   private async initialize() {
     // Ensure API Key is available
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
@@ -234,16 +291,20 @@ export class ChatService {
           },
         },
       },
-      
 
       {
         type: 'function',
         function: {
-          name: 'getCartSummary',
-          description: 'Retrieves the final summary and total price of the cart. Use before asking for final confirmation.',
+          name: 'checkoutCart',
+          description: 'Performs the final checkout for a Boulevard cart. Requires the full cartId.',
           parameters: {
             type: 'object',
-            properties: { cartId: { type: 'string' } },
+            properties: {
+              cartId: {
+                type: 'string',
+                description: 'Existing cart ID (e.g., urn:blvd:Cart:23f5903a-3476-478a-8096-da405bf11d53).',
+              },
+            },
             required: ['cartId'],
           },
         },
@@ -251,8 +312,8 @@ export class ChatService {
       {
         type: 'function',
         function: {
-          name: 'confirmBooking',
-          description: 'Finalizes the appointment booking. Only call after all details are selected and confirmed by the user.',
+          name: 'getCartSummary',
+          description: 'Retrieves the final summary and total price of the cart. Use before asking for final confirmation.',
           parameters: {
             type: 'object',
             properties: { cartId: { type: 'string' } },
@@ -331,15 +392,11 @@ If the API returns \`105000\`, display **$1,050.00**.
     * ⚠️ **NEVER EVER** use a truncated Cart ID (for example, **\`urn:blvd:Cart:\`**).  
       You **MUST** use the complete ID (for example, **\`urn:blvd:Cart:ac67fb72-8c8f-4cef-b992-b9f9ffdfa510\`**) when calling **\`setClientOnCart\`**, **\`getCartSummary\`**, or **\`confirmBooking\`**.
     * If the Cart ID is missing, incomplete, or corrupted, you **MUST** inform the user that the cart session is invalid and that the booking process must restart.
-16.  **PAYMENT TOKEN HANDLING RULE:**
-- When a payment token becomes available (stored in variable \`paymentToken\`), you MUST immediately call the \`addCartCardPaymentMethod\` tool with:
-  - cartId: the current cart ID
-  - token: the value of paymentToken
-  - select: true
-- After successfully adding the payment method, call \`getCartSummary\` to show the total.
-- Then, if the user has already confirmed all other booking details, you may call \`confirmBooking\`.
 
-
+16. **🛑 CRITICAL PAYMENT GATE (STOP FOR TOKEN) 🛑:**
+    * **ABSOLUTE RULE:** After the **\`setClientOnCart\`** tool is successfully called, you **MUST NOT** call any further tools, including \`getCartSummary\`.
+    * You **MUST** respond conversationally to the user to inform them that their details are set and they can now proceed to payment/checkout.
+    * **The remaining checkout steps are locked until a payment token is received.**
 `,
   };
 }
@@ -508,10 +565,54 @@ If the API returns \`105000\`, display **$1,050.00**.
 
             console.log("funcName >> ",funcName)
 
+// Parse the result safely
+let toolData: any = {};
+try {
+  toolData = typeof result?.content?.[0]?.text === 'string'
+    ? JSON.parse(result.content[0].text)
+    : result?.content?.[0]?.text || result || {};
+} catch {}
+
+// --- Update sessionState ---
+if (!this.sessionState[sessionId]) this.sessionState[sessionId] = {};
+
+// Capture Cart ID from tool output
+if (toolData.cartId) this.sessionState[sessionId].cartId = toolData.cartId;
+
+// Capture other critical IDs if present
+if (toolData.selectedItems?.length) {
+  const item = toolData.selectedItems[0];
+  if (item.id) this.sessionState[sessionId].serviceItemId = item.id;
+  if (item.staffVariantId) this.sessionState[sessionId].staffVariantId = item.staffVariantId;
+}
+if (toolData.selectedBookableItem?.id) {
+  this.sessionState[sessionId].bookableTimeId = toolData.selectedBookableItem.id;
+}
+
+
+
             // --- Extract and stringify result for LLM context ---
             toolResultContent = result?.content?.[0]?.text || '{}';
 
-            console.log(`✅ Tool ${funcName} executed. Result length: ${toolResultContent.length}`);
+            console.log(`✅ Tool ${funcName} executed}`);
+
+
+            if (funcName === 'createAppointmentCart') {
+              const cartId = toolData?.createCart?.cart?.id;
+              if (cartId) {
+                
+                // Ensure the session object exists
+                if (!this.sessionState[sessionId]) {
+                  this.sessionState[sessionId] = {};
+                }
+            
+                this.sessionState[sessionId].cartId = cartId;
+              } else {
+                console.warn('⚠️ createAppointmentCart did not return a valid cart ID.');
+              }
+            }
+            
+
           } catch (error: any) {
             // --- Handle tool call or execution errors gracefully ---
             console.error(`❌ Tool ${funcName} failed:`, error.message);
@@ -546,7 +647,6 @@ If the API returns \`105000\`, display **$1,050.00**.
                 type: 'SHOW_PAY_BUTTON',
                 checkoutUrl: 'https://blvd-chatbot.ostlive.com/checkout',
               };
-              console.log("parsed >> ",parsed)
              // toolResultContent = JSON.stringify(parsed);
             //  console.log('💳 Added frontendAction to toolResultContent',toolResultContent);
             // } catch (err) {
