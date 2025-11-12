@@ -47,6 +47,7 @@ async setPaymentToken(token: string, sessionId = 'default'): Promise<any> {
 
   const session = this.sessionState[sessionId];
   const cartId = session?.cartId;
+  console.log("session data >>> ",session)
   // const bookableTimeId = session?.bookableTimeId; // <-- Crucial ID for re-reservation
   // console.log("timeid",session?.bookableTimeId) 
 
@@ -150,7 +151,7 @@ async setPaymentToken(token: string, sessionId = 'default'): Promise<any> {
     // Setup MCP Client Transport
     const transport = new StdioClientTransport({
       command: 'node',
-      args: ['dist/appointment-booking.js'],
+      args: ['dist/membership-booking.js'],
       stderr: 'inherit',
     });
 
@@ -375,21 +376,203 @@ async setPaymentToken(token: string, sessionId = 'default'): Promise<any> {
       },
     ];
   }
-// Inside ChatService class:
-// Inside ChatService class:
-// Inside ChatService class:
-// Inside ChatService class:
-// Inside ChatService class:
 
-private buildSystemPrompt(): OpenAI.Chat.Completions.ChatCompletionMessageParam {
-    
+
+  private getMembershipTools(): OpenAI.Chat.Completions.ChatCompletionTool[]{
+    return [
+      {
+        type: 'function',
+        function: {
+          name: 'getLocations',
+          description: 'Fetches all available locations for membership. Use this first.',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+
+      {
+        type: 'function',
+        function: {
+          name: 'getMembershipPlans',
+          description: 'Fetches all available membership.',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+
+      {
+        type: 'function',
+        function: {
+          name: 'createMembershipCart',
+          description: 'Creates a new membership cart for a specified location. Requires locationId.',
+          parameters: {
+            type: 'object',
+            properties: { locationId: { type: 'string', description: 'The ID of the selected location.' } },
+            required: ['locationId'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'addMemberhipToCart',
+          description: 'Purchase a membership for a specified item. Requires itemId.',
+          parameters: {
+            type: 'object',
+            properties: { 
+              id: { type: 'string'},
+              itemId: { type: 'string', description: 'returned from Selected Membership.' },
+            },
+            required: ['id','itemId'],
+          },
+        },
+      },
+
+
+      {
+        type: 'function',
+        function: {
+          name: 'setClientOnCart',
+          description: 'Attaches client information to the cart before checkout (first name, last name, email, phone number).',
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: { type: 'string', description: 'Existing cart ID.' },
+              firstName: { type: 'string', description: 'User first name.' },
+              lastName: { type: 'string', description: 'User last name.' },
+              email: { type: 'string', description: 'User email address.' },
+              phoneNumber: { type: 'string', description: 'User phone number.' },
+            },
+            required: ['cartId', 'firstName', 'lastName', 'email', 'phoneNumber'],
+          },
+        },
+      },
+
+      {
+        type: 'function',
+        function: {
+          name: 'addCartCardPaymentMethod',
+          description: 'Attaches a tokenized card payment method to an existing Boulevard cart.',
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: { type: 'string', description: 'Existing cart ID.' },
+              token: { type: 'string', description: 'Card token returned from tokenizeCard tool.' },
+              select: {
+                type: 'boolean',
+                description: 'Whether to set this card as the selected payment method.',
+                default: true,
+              },
+            },
+            required: ['cartId', 'token'],
+          },
+        },
+      },
+
+      {
+        type: 'function',
+        function: {
+          name: 'checkoutCart',
+          description: 'Performs the final checkout for a Boulevard cart. Requires the full cartId.',
+          parameters: {
+            type: 'object',
+            properties: {
+              cartId: {
+                type: 'string',
+                description: 'Existing cart ID (e.g., urn:blvd:Cart:23f5903a-3476-478a-8096-da405bf11d53).',
+              },
+            },
+            required: ['cartId'],
+          },
+        },
+      },
+      // {
+      //   type: 'function',
+      //   function: {
+      //     name: 'getCartSummary',
+      //     description: 'Retrieves the final summary and total price of the cart. Use before asking for final confirmation.',
+      //     parameters: {
+      //       type: 'object',
+      //       properties: { cartId: { type: 'string' } },
+      //       required: ['cartId'],
+      //     },
+      //   },
+      // },
+
+
+    ]
+  }
+
+private buildSystemPrompt(userSelection?: 'booking' | 'membership'): OpenAI.Chat.Completions.ChatCompletionMessageParam {
+
+  console.log("userSelection  >> ",userSelection)
   const getTodayDate = () => {
     const today = new Date();
     return today.toISOString().split('T')[0];
   };
 
+  // Step 1: If no selection yet → ask user first
+  if (!userSelection) {
+    return {
+      role: 'system',
+      content: `
+        You are an intelligent and conversational assistant for a salon & spa system.
+        Your first task is to understand what the user wants to do.
 
-  
+        Ask the user clearly:
+
+        **"Would you like to go with Booking an appointment or managing a Membership?"**
+
+        Once the user responds:
+        - If they say “booking”, “appointment”, “schedule”, etc., switch to the **booking module**.
+        - If they say “membership”, “plan”, “package”, etc., switch to the **membership module**.
+
+        Keep the conversation polite and friendly.
+
+        Do not start any booking or membership action until the user makes a choice.
+      `,
+    };
+  }
+
+  // Step 2: Membership module
+  if (userSelection === 'membership') {
+    return {
+      role: 'system',
+      content: `
+        You are a smart, friendly, and detail-oriented **Membership Management AI**.
+        Your goal is to help users understand, purchase, and manage their salon or spa memberships.
+
+        ## 🎯 Core Objectives:
+        1. **Understand Intent:** Identify if the user wants to buy, renew, upgrade, cancel, or check details of a membership.
+        2. **Provide Clear Options:** When listing memberships, show:
+          - Name
+          - Price (formatted in $X.XX)
+          - Benefits or duration
+        3. **Flow Logic:**
+          - Step 1: Show location list (\`getLocations\`)
+          - Step 2: Ask user to pick one
+          - Step 3: update \'createAppointmentCart\' api
+          - Step 4: Show available memberships (\`getMembershipPlans\`)
+          - Step 5: Ask user to pick one
+          - Step 6: Confirm choice and update \`addMemberhipToCart\`
+          - Step 7: Confirm choice and collect user details (name, email, phone)
+          - Step 8: after collect details update \`setClientOnCart\`
+          - Step 9: wait for token which is coming from another screen
+          - Step 9: when token is received successfully then call \'addCartCardPaymentMethod\'
+          - Step 10: when 'addCartCardPaymentMethod' responsed success then call \'checkoutCart\'
+
+        4. **🛑 CRITICAL PAYMENT GATE (STOP FOR TOKEN) 🛑:**
+        * **ABSOLUTE RULE:** After the **\`setClientOnCart\`** tool is successfully called, you **MUST NOT** call any further tools, including \`getCartSummary\`.
+        * You **MUST** respond conversationally to the user to inform them that their details are set and they can now proceed to payment/checkout.
+        * **The remaining checkout steps are locked until a payment token is received.**
+        
+        5. **Conversational Flexibility:**
+          - If the user asks to “book” a service, politely redirect them to the booking module.
+        6. **Presentation Rules:**
+          - Use Markdown for clarity when listing plans and benefits.
+              `,
+    };
+  }
+
+  // Step 3: Booking module (your existing booking prompt)
   return {
     role: 'system',
     content: `
@@ -458,6 +641,7 @@ If the API returns \`105000\`, display **$1,050.00**.
   };
 }
 
+
 // ... the rest of the ChatService class is unchanged.
 
 // ... the rest of the ChatService class is unchanged.
@@ -521,7 +705,7 @@ If the API returns \`105000\`, display **$1,050.00**.
   }
 
   // Function for context management using programmatic state extraction
-  private async pruneHistoryForState(sessionId: string): Promise<void> {
+  private async pruneHistoryForState(sessionId: string, userMessage:string): Promise<void> {
     const history = this.conversationHistory[sessionId];
     const PRUNE_THRESHOLD = 20; // Prune if history is too long (e.g., more than 20 messages)
 
@@ -543,9 +727,12 @@ If the API returns \`105000\`, display **$1,050.00**.
         // Rebuild the history: System Prompt + State Summary + Current User Message
         // The current user's message is the last element in the array
         const currentUserMessage = history[history.length - 1]; 
+       // const userIntent = this.detectIntentFromUserMessage(userMessage);
+
+      const userIntent:any = this.detectIntentFromUserMessage(userMessage);
 
         this.conversationHistory[sessionId] = [
-            this.buildSystemPrompt(), // The latest system rules
+            this.buildSystemPrompt(userIntent), // The latest system rules
             { 
                 role: 'user', 
                 content: `[SYSTEM MEMORY PRUNING]: The established booking state is: ${summary}` 
@@ -560,16 +747,21 @@ If the API returns \`105000\`, display **$1,050.00**.
 
   // The simplified, AI-driven getResponse function
   async getResponse(userMessage: string, sessionId = 'default') {
+    console.log("userMessage  >> ",userMessage);
+    let userIntent: any = "membership";
     if (!this.conversationHistory[sessionId]) {
       // Initialize with the comprehensive system prompt
-      this.conversationHistory[sessionId] = [this.buildSystemPrompt()];
+      userIntent = this.detectIntentFromUserMessage(userMessage);
+      console.log("userIntent  >> ",userIntent)
+      this.conversationHistory[sessionId] = [this.buildSystemPrompt(userIntent)];
     }
 
+    console.log("testttt")
     // Add the user's latest message to the history
     this.conversationHistory[sessionId].push({ role: 'user', content: userMessage });
     
     // CRITICAL: Check and prune history before starting the main loop
-    await this.pruneHistoryForState(sessionId);
+    await this.pruneHistoryForState(sessionId,userMessage);
 
     let response: OpenAI.Chat.Completions.ChatCompletion = null as any;
     // Set a loop limit to prevent runaway function calls
@@ -581,7 +773,8 @@ If the API returns \`105000\`, display **$1,050.00**.
         response = await this.openai.chat.completions.create({
           model: 'gpt-4o-mini', // The model must support tool-calling
           messages: this.conversationHistory[sessionId],
-          tools: this.getBookingTools(), // Provide all available MCP functions
+         // tools: this.getMembershipTools(),
+          tools: (userIntent == "membership")?this.getMembershipTools():this.getBookingTools(),  // Provide all available MCP functions
           tool_choice: 'auto', // Let the AI decide if a tool is needed
         });
       } catch (error) {
@@ -631,8 +824,8 @@ If the API returns \`105000\`, display **$1,050.00**.
               } catch {}
 
 
-              console.log("toolData",toolData?.updateCart?.cart?.clientInformation?.email);
-
+              console.log("toolData",toolData?.updateCart?.cart);
+              console.log("toolDatawhole >>",toolData);
 
 
 
@@ -645,8 +838,8 @@ If the API returns \`105000\`, display **$1,050.00**.
                 this.sessionState[sessionId].clientEmail =
                 toolData?.updateCart?.cart?.clientInformation?.email || 'guest@example.com';
               }
-              if(toolData?.addCartSelectedBookableItem?.cart?.summary?.total){
-                this.sessionState[sessionId].totalAmount = toolData?.addCartSelectedBookableItem?.cart?.summary?.total/100;
+              if(toolData?.addCartSelectedBookableItem?.cart?.summary?.total || toolData?.updateCart?.cart?.summary?.total){
+                this.sessionState[sessionId].totalAmount = toolData?.addCartSelectedBookableItem ? toolData?.addCartSelectedBookableItem?.cart?.summary?.total/100 : toolData?.updateCart?.cart?.summary?.total/100;
               }
 
                 
@@ -656,7 +849,7 @@ If the API returns \`105000\`, display **$1,050.00**.
 
 
               // Capture Cart ID from tool output
-              if (toolData.cartId) this.sessionState[sessionId].cartId = toolData.cartId;
+              if (toolData.cartId || toolData?.updateCart?.cart?.id) this.sessionState[sessionId].cartId = toolData?.cartId ?? toolData?.updateCart?.cart?.id;
 
               // Capture other critical IDs if present
               if (toolData.selectedItems?.length) {
@@ -722,7 +915,7 @@ If the API returns \`105000\`, display **$1,050.00**.
         if (funcName === 'setClientOnCart') {
           
 
-          console.log("thistotalAmount2", this.sessionState[sessionId].totalAmount);
+          console.log("thistotalAmount2", this.sessionState[sessionId]);
           
 
           //  try {
@@ -745,4 +938,23 @@ If the API returns \`105000\`, display **$1,050.00**.
     // Safety fallback if the loop limit is reached
     return { reply: { role: 'assistant', content: 'I seem to be stuck in a complex sequence. Could you please simplify your request or state the detail you want to change?' } };
   }
+
+
+  private detectIntentFromUserMessage(message: string){
+    const lower = message.toLowerCase();
+  
+    if (lower.includes('membership') || lower.includes('member') || lower.includes('package') || lower.includes('plan')) {
+      return 'membership';
+    }
+    if (lower.includes('book') || lower.includes('appointment') || lower.includes('service') || lower.includes('schedule')) {
+      return 'booking';
+    }
+  
+    // default to booking if unsure
+    return null;
+  }
+  
 }
+
+
+
