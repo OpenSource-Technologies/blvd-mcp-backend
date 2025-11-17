@@ -591,6 +591,7 @@ server.tool(
 );
 
 
+
 server.tool("availableServicesGiftCard", "Get available services", {
     cartId: z.string().describe("cart id"),
 }, async ({ cartId }) => {
