@@ -612,12 +612,13 @@ server.tool(
   "Add a giftcard to an existing cart",
   {
     id: z.string().describe("existing cart id"),
-    itemPrice: z.string().describe("giftcard prise"),
+    itemId: z.string().describe("item id"),
+    itemPrice: z.number().describe("giftcard prise"),
   },
-  async ({id, itemPrice}) =>{
+  async ({id, itemId, itemPrice}) =>{
     const data = await gql(ADD_GIFT_CARD_TO_CART, 'CLIENT', { input: {
         "id":id,
-        "itemId":'GIFT_CARD',
+        "itemId":itemId,
         "itemPrice": itemPrice
       } });
     // const locations = data?.locations?.edges ?? [];

@@ -535,10 +535,11 @@ async setPaymentToken(token: string, sessionId = 'default'): Promise<any> {
           parameters: {
             type: 'object',
             properties: { 
-              id: { type: 'string'},
-              itemPrice: { type: 'string', description: 'returned from Selected giftcard.' },
+              id: { type: 'string', description: 'Cart ID.'},
+              itemId: { type: 'string', description: 'ItemId of the data set GIFT_CARD as itemId if not found.' },
+              itemPrice: { type: 'number', description: 'returned from Selected giftcard.' },
             },
-            required: ['id','itemPrice'],
+            required: ['id','itemId','itemPrice'],
           },
         },
       },
@@ -994,7 +995,7 @@ If the API returns \`105000\`, display **$1,050.00**.
     let response: OpenAI.Chat.Completions.ChatCompletion = null as any;
     // Set a loop limit to prevent runaway function calls
     let funcName:any;
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 5; i++) {
       console.log(`\n➡️ LLM Call ${i + 1}: Sending ${this.conversationHistory[sessionId].length} messages...`);
 
       // const summaryPrompt:any = [
