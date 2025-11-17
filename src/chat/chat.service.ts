@@ -22,6 +22,7 @@ export class ChatService {
   public paymentToken: string | null = null;
   email:any;
   totalAmount:any;
+  toolCache:any;
   private sessionState: Record<string, {
     cartId?: string;
     serviceItemId?: string;
@@ -508,8 +509,8 @@ async setPaymentToken(token: string, sessionId = 'default'): Promise<any> {
       {
         type: 'function',
         function: {
-          name: 'getLocations',
-          description: 'Fetches all available locations for membership. Use this first.',
+          name: 'createGiftCardCart',
+          description: 'Create cart with static location id. Use this first.',
           parameters: { type: 'object', properties: {} },
         },
       },
@@ -517,40 +518,51 @@ async setPaymentToken(token: string, sessionId = 'default'): Promise<any> {
       {
         type: 'function',
         function: {
-          name: 'getMembershipPlans',
-          description: 'Fetches all available membership.',
-          parameters: { type: 'object', properties: {} },
-        },
-      },
-
-      {
-        type: 'function',
-        function: {
-          name: 'createMembershipCart',
-          description: 'Creates a new membership cart for a specified location. Requires locationId.',
+          name: 'availableServicesGiftCard',
+          description: 'Fetch all available gift card slot .',
           parameters: {
             type: 'object',
-            properties: { locationId: { type: 'string', description: 'The ID of the selected location.' } },
-            required: ['locationId'],
+            properties: { cartId: { type: 'string', description: 'The ID of the Cart.' } },
+            required: ['cartId'],
           },
         },
       },
       {
         type: 'function',
         function: {
-          name: 'addMemberhipToCart',
-          description: 'Purchase a membership for a specified item. Requires itemId.',
+          name: 'addGiftCardToCart',
+          description: 'buy a giftcard. Requires itemId,itemPrice.',
           parameters: {
             type: 'object',
             properties: { 
               id: { type: 'string'},
-              itemId: { type: 'string', description: 'returned from Selected Membership.' },
+              itemPrice: { type: 'string', description: 'returned from Selected giftcard.' },
             },
-            required: ['id','itemId'],
+            required: ['id','itemPrice'],
           },
         },
       },
 
+      {
+        type: 'function',
+        function: {
+          name: 'updateGiftCardEmail',
+          description: 'Attaches client information to the cart before checkout (first name, last name, email, phone number).',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Existing cart ID.' },
+              itemId: {type: 'string', description: 'Selected card id.'},
+              itemPrice: {type: 'string', description: 'Selected card price.'},
+              recipientName: { type: 'string', description: 'given giftcard recipient name.' },
+              recipientEmail: { type: 'string', description: 'given giftcard recipient email.' },
+              senderName: { type: 'string', description: 'given giftcard sender name.' },
+              deliveryDate: { type: 'string', description: 'selected giftcard delivery date.' },
+            },
+            required: ['id', 'itemId', 'itemPrice', 'recipientName', 'recipientEmail', 'senderName', 'deliveryDate'],
+          },
+        },
+      },
 
       {
         type: 'function',
@@ -688,43 +700,127 @@ private buildSystemPrompt(userSelection): OpenAI.Chat.Completions.ChatCompletion
    // Step 2: Giftcard module
    if (userSelection === 'giftcard') {
     return {
-      role: 'system',
+      role: "system",
       content: `
-        You are a smart, friendly, and detail-oriented **GiftCard AI**.
-        Your goal is to help users understand and purchase giftcard.
-
-        ## 🎯 Core Objectives:
-        1. **Understand Intent:** Identify if the user wants to buy gifcard.
-        2. **Provide Clear Options:** When listing giftcard, show:
-          - Name
-          - Price (formatted in $X.XX)
-          - Benefits or duration
-        3. **Flow Logic:**
-          - Step 1: hit api in background with static locationid (\`createMembershipCart\`)
-          - Step 2: Ask user to pick one
-          - Step 3: update \'createAppointmentCart\' api
-          - Step 4: Show available memberships (\`getMembershipPlans\`)
-          - Step 5: Ask user to pick one
-          - Step 6: Confirm choice and update \`addMemberhipToCart\`
-          - Step 7: Confirm choice and collect user details (name, email, phone)
-          - Step 8: after collect details update \`setClientOnCart\`
-          - Step 9: wait for token which is coming from another screen
-          - Step 9: when token is received successfully then call \'addCartCardPaymentMethod\'
-          - Step 10: when 'addCartCardPaymentMethod' responsed success then call \'checkoutCart\'
-
-        4. **🛑 CRITICAL PAYMENT GATE (STOP FOR TOKEN) 🛑:**
-        * **ABSOLUTE RULE:** After the **\`setClientOnCart\`** tool is successfully called, you **MUST NOT** call any further tools, including \`getCartSummary\`.
-        * You **MUST** respond conversationally to the user to inform them that their details are set and they can now proceed to payment/checkout.
-        * **The remaining checkout steps are locked until a payment token is received.**
-        
-        5. **Conversational Flexibility:**
-          - If the user asks to “book” a service, politely redirect them to the booking module.
-        6. **Presentation Rules:**
-          - Use Markdown for clarity when listing plans and benefits.
-              `,
-    };
+    You are **GiftCard AI**, and your only job is to help users purchase Gift Cards.
+    
+    ---
+    
+    # 🎯 MAIN LOGIC (Simple)
+    
+    ### STEP 1 — createGiftCardCart
+    When user shows interest in gift cards, call \`createGiftCardCart\`.
+    
+    ### STEP 2 — availableServicesGiftCard
+    After creating the cart, call \`availableServicesGiftCard\`.
+    
+    ### STEP 3 — EXTRACT GIFT CARD DATA (CRITICAL FIX)
+    
+    From the \`availableServicesGiftCard\` result, you must find and display all available gift card items and their preset prices.
+    
+    1. **FLEXIBLE SEARCH (CRITICAL):** Iterate through **ALL** categories (\`availableCategories\`) and **ALL** items (\`availableItems\`) within them.
+    
+    2. **IDENTIFY GIFT CARD ITEMS:** A gift card item is defined as any item that contains a non-empty array for the **\`pricePresets\`** property.
+    
+    3. **Filter and Extract Data:**
+       * Ignore any category/item that is missing \`pricePresets\` or where \`pricePresets\` is empty/not an array.
+       * For valid items, extract the item's **\`name\`** and the **\`pricePresets\`** array.
+    
+    Example structure to search within (note: the category name might vary):
+    \`\`\`json
+    {
+      "availableCategories": [
+        {
+          "name": "Vouchers", // Category name might not be "Gift Cards"
+          "availableItems": [
+            {
+              "name": "E-Gift Card",
+              "pricePresets": [100, 200, 300]
+            },
+            {
+              "name": "Loyalty Points",
+              "pricePresets": [] // Skip this, pricePresets is empty
+            }
+          ]
+        },
+        {
+          "name": "Services", // Another category
+          "availableItems": [
+            {
+              "name": "Service A", // Skip this, no pricePresets
+              "price": 50
+            }
+          ]
+        }
+      ]
+    }
+    \`\`\`
+    
+    4. **Generate the Display List:**
+    
+    Format the extracted data into a display list:
+    
+    **🎁 Available Gift Cards**
+    - **[Item Name 1]** 💵 $[Amount 1] • $[Amount 2] • ...
+    - **[Item Name 2]** 💵 $[Amount A] • $[Amount B]
+    
+    THEN ASK:
+    **“Which gift card type and amount would you like to choose?”**
+    
+    Do NOT call \`addGiftCardToCart\` until user selects a valid amount for a listed item. If no items with valid \`pricePresets\` are found, tell the user, "I apologize, no gift cards are currently available."
+    
+    ---
+    
+    ### STEP 4 — addGiftCardToCart
+    Call this **ONLY** after the user selects a preset amount and item name (e.g., "E-Gift Card for $200").
+    
+    ---
+    
+    ### STEP 5 — Collect User Details
+    Ask for:
+    - First name
+    - Last name
+    - Email
+    - Phone number
+    
+    After ALL details are collected → call \`setClientOnCart\`.
+    
+    ---
+    
+    # 🛑 PAYMENT STOP POINT
+    After calling \`setClientOnCart\`:
+    
+    - Do NOT call any more tools.
+    - Tell user:  
+      **“Your details are saved. Please proceed to payment.”**
+    - Wait for a payment token from another screen.
+    
+    ---
+    
+    ### When the token arrives:
+    1. Call \`addCartCardPaymentMethod\`  
+    2. Then call \`checkoutCart\`  
+    3. Confirm the gift card purchase
+    
+    ---
+    
+    # RULES
+    - **STRICTLY:** Only display items that contain a valid and non-empty **\`pricePresets\`** array.
+    - Use markdown for lists.
+    - Stay friendly and concise.
+    - Only continue when user provides required info.
+    
+    ---
+    `
+    }
+    
+    
+    
+    
+    
   }
 
+  //return { role: 'system',content:''};
   // Step 4: Booking module (your existing booking prompt)
   return {
     role: 'system',
@@ -921,20 +1017,23 @@ If the API returns \`105000\`, display **$1,050.00**.
     let response: OpenAI.Chat.Completions.ChatCompletion = null as any;
     // Set a loop limit to prevent runaway function calls
     let funcName:any;
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 2; i++) {
       console.log(`\n➡️ LLM Call ${i + 1}: Sending ${this.conversationHistory[sessionId].length} messages...`);
 
-      const summaryPrompt:any = [
-        { role: 'system', content: 'Summarize the key points of this chat briefly:' },
-        ...this.conversationHistory[sessionId].slice(0, -10)
-      ];
+      // const summaryPrompt:any = [
+      //   { role: 'system', content: 'Summarize the key points of this chat briefly:' },
+      //   ...this.conversationHistory[sessionId].slice(0, -10)
+      // ];
 
+     // if (!this.toolCache[sessionId]) {
+       // this.toolCache[sessionId] = this.getGiftcardTools();
+      //}
 
 
       try {
         response = await this.openai.chat.completions.create({
           model: 'gpt-4o-mini', // The model must support tool-calling
-          messages: summaryPrompt,
+          messages: this.conversationHistory[sessionId],
           tools: this.getGiftcardTools(),//this.getGiftcardTools(),
          // tools: (userIntent == "membership")?this.getMembershipTools():this.getBookingTools(),  // Provide all available MCP functions
           tool_choice: 'auto', // Let the AI decide if a tool is needed
