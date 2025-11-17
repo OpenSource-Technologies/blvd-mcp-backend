@@ -706,7 +706,7 @@ private buildSystemPrompt(userSelection): OpenAI.Chat.Completions.ChatCompletion
     
     ---
     
-    # 🎯 MAIN LOGIC (Simple)
+    # 🎯 MAIN LOGIC
     
     ### STEP 1 — createGiftCardCart
     When user shows interest in gift cards, call \`createGiftCardCart\`.
@@ -714,65 +714,41 @@ private buildSystemPrompt(userSelection): OpenAI.Chat.Completions.ChatCompletion
     ### STEP 2 — availableServicesGiftCard
     After creating the cart, call \`availableServicesGiftCard\`.
     
-    ### STEP 3 — EXTRACT GIFT CARD DATA (CRITICAL FIX)
+    ### STEP 3 — EXTRACT, FORMAT, AND DISPLAY GIFT CARD DATA (CRITICAL)
     
-    From the \`availableServicesGiftCard\` result, you must find and display all available gift card items and their preset prices.
+    **Goal:** Display the item \`name\` and format its \`pricePresets\` as a clear list.
     
-    1. **FLEXIBLE SEARCH (CRITICAL):** Iterate through **ALL** categories (\`availableCategories\`) and **ALL** items (\`availableItems\`) within them.
+    **Example Data Structure you will encounter:**
     
-    2. **IDENTIFY GIFT CARD ITEMS:** A gift card item is defined as any item that contains a non-empty array for the **\`pricePresets\`** property.
-    
-    3. **Filter and Extract Data:**
-       * Ignore any category/item that is missing \`pricePresets\` or where \`pricePresets\` is empty/not an array.
-       * For valid items, extract the item's **\`name\`** and the **\`pricePresets\`** array.
-    
-    Example structure to search within (note: the category name might vary):
     \`\`\`json
-    {
-      "availableCategories": [
-        {
-          "name": "Vouchers", // Category name might not be "Gift Cards"
-          "availableItems": [
-            {
-              "name": "E-Gift Card",
-              "pricePresets": [100, 200, 300]
-            },
-            {
-              "name": "Loyalty Points",
-              "pricePresets": [] // Skip this, pricePresets is empty
-            }
-          ]
-        },
-        {
-          "name": "Services", // Another category
-          "availableItems": [
-            {
-              "name": "Service A", // Skip this, no pricePresets
-              "price": 50
-            }
-          ]
-        }
-      ]
-    }
+    {"name":"Gift Card","pricePresets":[2500,5000,10000,20000,25000]}
     \`\`\`
     
-    4. **Generate the Display List:**
+    1. **Iterate and Identify:** Find all items across all categories that have a non-empty, valid array in their **\`pricePresets\`** property.
     
-    Format the extracted data into a display list:
+    2. **Format Prices:** All values in \`pricePresets\` are given in **cents/minor currency unit**. You must divide each value by 100 and format it as a currency (e.g., $25.00).
+    
+    3. **Generate the Display List (Strict Format):**
+       Combine the formatted item name and prices into a highly readable list structure.
     
     **🎁 Available Gift Cards**
-    - **[Item Name 1]** 💵 $[Amount 1] • $[Amount 2] • ...
-    - **[Item Name 2]** 💵 $[Amount A] • $[Amount B]
+    - **[Item Name]**
+      💵 $[Price 1] • $[Price 2] • $[Price 3] • ...
+    
+    *Example Output:*
+    **🎁 Available Gift Cards**
+    - **Gift Card**
+      💵 $25.00 • $50.00 • $100.00 • $200.00 • $250.00
     
     THEN ASK:
     **“Which gift card type and amount would you like to choose?”**
     
-    Do NOT call \`addGiftCardToCart\` until user selects a valid amount for a listed item. If no items with valid \`pricePresets\` are found, tell the user, "I apologize, no gift cards are currently available."
+    Do NOT call \`addGiftCardToCart\` until the user selects a valid amount for a listed item. If no valid items are found, tell the user, "I apologize, no gift cards are currently available."
     
     ---
     
     ### STEP 4 — addGiftCardToCart
-    Call this **ONLY** after the user selects a preset amount and item name (e.g., "E-Gift Card for $200").
+    Call this **ONLY** after the user selects a preset amount and item name (e.g., "Gift Card for $200"). **The amount passed to the tool must be the original value in cents (e.g., 20000 for $200.00).**
     
     ---
     
@@ -805,6 +781,7 @@ private buildSystemPrompt(userSelection): OpenAI.Chat.Completions.ChatCompletion
     ---
     
     # RULES
+    - **Currency Conversion:** Always convert \`pricePresets\` values from cents (e.g., 2500) to dollars (e.g., $25.00) for display.
     - **STRICTLY:** Only display items that contain a valid and non-empty **\`pricePresets\`** array.
     - Use markdown for lists.
     - Stay friendly and concise.

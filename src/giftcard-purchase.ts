@@ -601,8 +601,10 @@ server.tool("availableServicesGiftCard", "Get available services", {
         c => c.name === "Gift Cards"
       );
 
-     console.error("available services:", giftCardData.availableItems.pricePresets);  // const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(giftCardData) }] };
+      console.error("available giftCardData:", JSON.stringify(giftCardData.availableItems[0])); 
+
+ // const locations = data?.locations?.edges ?? [];
+    return { content: [{ type: "text", text: JSON.stringify(giftCardData.availableItems[0]) }] };
 });
 
 server.tool(
