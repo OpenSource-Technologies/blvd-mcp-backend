@@ -32,6 +32,8 @@ export class ChatService implements OnModuleInit {
   private readonly POLL_INTERVAL_MS = 2000; // Slower polling = fewer API calls
   private readonly MAX_POLL_ATTEMPTS = 30;
 
+  private conversationHistory:any;
+
   constructor() {
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
@@ -40,10 +42,11 @@ export class ChatService implements OnModuleInit {
 
 
 
-  private async initMCP() {
+  private async initMCP(module:any) {
     this.transport = new StdioClientTransport({
       command: 'node',
-      args: ['dist/appointment-booking.js','dist/giftcard-purchase.js'],
+     // args: ['dist/appointment-booking.js','dist/giftcard-purchase.js'],
+     args: module=='gift'?['dist/giftcard-purchase.js']:['dist/appointment-booking.js'],
       stderr: 'inherit',
     });
 
@@ -118,32 +121,67 @@ export class ChatService implements OnModuleInit {
     return this.sessionState[sessionId].threadId!;
   }
 
-  private detectAssistant(userMessage: string): 'booking' | 'gift' {
-    const msg = userMessage.toLowerCase();
+  private detectAssistant(userMessage: string, currentIntent:any){
+    const lower = userMessage.toLowerCase();
+
   
-    const giftKeywords = [
-      'gift card', 'giftcard', 'buy gift', 'purchase gift', 'gift amount',
-      'send gift', 'email gift card'
-    ];
-  
-    if (giftKeywords.some(k => msg.includes(k))) {
+    if (lower.includes('membership') || lower.includes('member') || lower.includes('package') || lower.includes('plan')) {
+      this.conversationHistory = "membership";
+      return 'membership';
+    }
+    if (lower.includes('book') || lower.includes('appointment') || lower.includes('service') || lower.includes('schedule')) {
+      this.conversationHistory = "booking";
+      return 'booking';
+    }
+    if (lower.includes('gift') || lower.includes('giftcard')) {
+      this.conversationHistory = "gift";
       return 'gift';
     }
   
-    return 'booking';
+    // default to booking if unsure
+    return null;
+
+    // const bookingKeywords = [
+    //   'book', 'appointment', 'service'
+    // ];
+
+    // const giftKeywords = [
+    //   'gift card', 'giftcard', 'buy gift', 'purchase gift', 'gift amount',
+    //   'send gift', 'email gift card', 'gift'
+    // ];
+  
+    // if (bookingKeywords.some(k => msg.includes(k))) {
+    //   return 'booking';
+    // }
+
+    // if (giftKeywords.some(k => msg.includes(k))) {
+    //   return 'gift';
+    // }
+  
+    // return null;
   }
   
 
   public async sendMessage(userMessage: string, sessionId = 'default'): Promise<{ reply: any }> {
-    if (!this.mcpClient) await this.initMCP();
+   
     // if (!this.assistantId) await this.initializeAssistantOnce();
     // if (!this.assistantId) throw new Error('Assistant not initialized.');
 
 
       // 🔥 DETECT ASSISTANT
-      const intent = this.detectAssistant(userMessage);
+     // this.conversationHistory
+     let intent:any = '';
+    // if(!this.conversationHistory){
+      intent = this.detectAssistant(userMessage,this.conversationHistory);
+     // this.conversationHistory = intent
+    // }
 
-      if (intent === 'gift') {
+    if (!this.mcpClient) await this.initMCP(this.conversationHistory);
+      
+      console.log("intentintent  >> ",intent);
+      console.log("conversationHistory >> ",this.conversationHistory)
+
+      if (this.conversationHistory === 'gift') {
           this.assistantId = process.env.GIFT_ASSISTANT_ID!;
           console.log("🎁 Using Gift Card Assistant");
       } else {
@@ -415,8 +453,11 @@ export class ChatService implements OnModuleInit {
     ) {
       iterationCount++;
       console.log(`🔧 Iteration ${iterationCount}`);
+
+      console.log("currentRun  >> ",currentRun)
       
       const toolCalls = currentRun.required_action.submit_tool_outputs.tool_calls;
+      console.log("toolCallsinn  >> ", toolCalls)
       const toolOutputs: any[] = [];
       
       for (const toolCall of toolCalls) {
@@ -522,7 +563,7 @@ export class ChatService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    await this.initMCP();
+   // await this.initMCP();
     // await this.initializeAssistantOnce();
 
     if (!process.env.BOOKING_ASSISTANT_ID)

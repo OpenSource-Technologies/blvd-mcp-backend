@@ -142,50 +142,6 @@ const CREATE_CART = `mutation createCart($input:CreateCartInput!){
       createCart(input:$input){
           cart{
             id
-            clientMessage
-            expiresAt
-            features{
-              bookingQuestionsEnabled
-              giftCardPurchaseEnabled
-              paymentInfoRequired
-              serviceAddonsEnabled
-            }
-            summary{
-              deposit
-              depositAmount
-              discountAmount
-              gratuityAmount
-              paymentMethodRequired
-              roundingAmount
-              subtotal
-              taxAmount
-              total
-            }
-            bookingQuestions{
-              id
-              key
-              label
-              required
-            }
-            clientInformation{
-              email
-              firstName
-              lastName
-              phoneNumber
-              externalId
-            }
-            location{
-              id
-              name
-              address {
-                city
-                country
-                line1
-                line2
-                state
-              }
-              businessName
-            }
           }
       }
   }`;
@@ -204,6 +160,9 @@ const CREATE_CART = `mutation createCart($input:CreateCartInput!){
                     min
                     max
                     variable
+                }
+                    ... on CartAvailableGiftCardItem {
+                    pricePresets
                 }
             }
         }
@@ -619,28 +578,33 @@ const APPLY_PROMOTION_CODE = `mutation addCartOffer($input:AddCartOfferInput!){
 
 
 server.tool(
-  "createMembershipCart",
+  "createGiftCardCart",
   "Create a cart scoped to a business/location for membership purchase",
   {
-    locationId: z.string().describe("location id"),
   },
-  async ({locationId}) =>{
-    const data = await gql(CREATE_CART, 'CLIENT', { input: {locationId: locationId} });
+  async () =>{
+    const {LOCATION_ID} = process.env; //"urn:blvd:Location:9d7353d1-d903-4e6b-8072-1f6c938e7e9b"
+    const data = await gql(CREATE_CART, 'CLIENT', { input: {locationId: LOCATION_ID} });
     // const locations = data?.locations?.edges ?? [];
     return { content: [{ type: "text", text: JSON.stringify(data) }] };
   }
 );
 
 
-server.tool("availableServices", "Get available services", {
+
+server.tool("availableServicesGiftCard", "Get available services", {
     cartId: z.string().describe("cart id"),
 }, async ({ cartId }) => {
   
     const data = await gql(AVAILABLE_SERVICES, 'CLIENT', { id: cartId });
-  
-  
-    // console.error("available services:", JSON.stringify(data, null, 2));  // const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    const giftCardData = data.cart.availableCategories.find(
+        c => c.name === "Gift Cards"
+      );
+
+      console.error("available giftCardData:", JSON.stringify(giftCardData.availableItems[0])); 
+
+ // const locations = data?.locations?.edges ?? [];
+    return { content: [{ type: "text", text: JSON.stringify(giftCardData.availableItems[0]) }] };
 });
 
 server.tool(
@@ -648,8 +612,8 @@ server.tool(
   "Add a giftcard to an existing cart",
   {
     id: z.string().describe("existing cart id"),
-    itemId: z.string().describe("giftcard id"),
-    itemPrice: z.string().describe("giftcard prise"),
+    itemId: z.string().describe("item id"),
+    itemPrice: z.number().describe("giftcard prise"),
   },
   async ({id, itemId, itemPrice}) =>{
     const data = await gql(ADD_GIFT_CARD_TO_CART, 'CLIENT', { input: {
@@ -690,7 +654,7 @@ server.tool(
   );
 
   
-  
+
 
 server.tool(
   "setClientOnCart",
