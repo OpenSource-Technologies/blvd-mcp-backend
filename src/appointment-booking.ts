@@ -170,7 +170,6 @@ const AVAILABLE_SERVICES = `query serviceList($id:ID!){
     cart(id:$id){
         availableCategories{
             id
-            name
             availableItems{
                 id
                 name
@@ -398,13 +397,8 @@ server.tool("availableServices", "Get available services", {
     const data = await gql(AVAILABLE_SERVICES, 'CLIENT', { id: cartId });
   
   
-    const EXCLUDED_CATEGORIES = ["memberships", "packages", "products", "gift cards"];
-  
-    const filteredCategories = data.cart.availableCategories.filter(cat => {
-      return !EXCLUDED_CATEGORIES.includes(cat.name?.toLowerCase());
-    });
     // console.error("available services:", JSON.stringify(data, null, 2));  // const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(filteredCategories) }] };
+    return { content: [{ type: "text", text: JSON.stringify(data) }] };
 });
 
 
