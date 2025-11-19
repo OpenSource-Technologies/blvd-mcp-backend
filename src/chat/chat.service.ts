@@ -36,10 +36,14 @@ export class ChatService implements OnModuleInit {
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
 
+
+
+
+
   private async initMCP() {
     this.transport = new StdioClientTransport({
       command: 'node',
-      args: ['dist/appointment-booking.js'],
+      args: ['dist/appointment-booking.js','dist/giftcard-purchase.js'],
       stderr: 'inherit',
     });
 
@@ -114,10 +118,39 @@ export class ChatService implements OnModuleInit {
     return this.sessionState[sessionId].threadId!;
   }
 
+  private detectAssistant(userMessage: string): 'booking' | 'gift' {
+    const msg = userMessage.toLowerCase();
+  
+    const giftKeywords = [
+      'gift card', 'giftcard', 'buy gift', 'purchase gift', 'gift amount',
+      'send gift', 'email gift card'
+    ];
+  
+    if (giftKeywords.some(k => msg.includes(k))) {
+      return 'gift';
+    }
+  
+    return 'booking';
+  }
+  
+
   public async sendMessage(userMessage: string, sessionId = 'default'): Promise<{ reply: any }> {
     if (!this.mcpClient) await this.initMCP();
-    if (!this.assistantId) await this.initializeAssistantOnce();
-    if (!this.assistantId) throw new Error('Assistant not initialized.');
+    // if (!this.assistantId) await this.initializeAssistantOnce();
+    // if (!this.assistantId) throw new Error('Assistant not initialized.');
+
+
+      // 🔥 DETECT ASSISTANT
+      const intent = this.detectAssistant(userMessage);
+
+      if (intent === 'gift') {
+          this.assistantId = process.env.GIFT_ASSISTANT_ID!;
+          console.log("🎁 Using Gift Card Assistant");
+      } else {
+          this.assistantId = process.env.BOOKING_ASSISTANT_ID!;
+          console.log("💇 Using Booking Assistant");
+      }
+
 
     // Check if thread needs reset
     await this.checkAndResetThread(sessionId);
@@ -490,7 +523,15 @@ export class ChatService implements OnModuleInit {
 
   async onModuleInit() {
     await this.initMCP();
-    await this.initializeAssistantOnce();
+    // await this.initializeAssistantOnce();
+
+    if (!process.env.BOOKING_ASSISTANT_ID)
+      throw new Error("BOOKING_ASSISTANT_ID missing");
+  
+    if (!process.env.GIFT_ASSISTANT_ID)
+      throw new Error("GIFT_ASSISTANT_ID missing");
+  
+    console.log("✅ Assistants ready");
     
     console.log('🔍 OpenAI SDK initialized:', {
       hasBeta: !!this.openai?.beta,
