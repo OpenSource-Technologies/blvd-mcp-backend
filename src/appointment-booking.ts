@@ -163,50 +163,6 @@ const CREATE_CART = `mutation createCart($input:CreateCartInput!){
       createCart(input:$input){
           cart{
             id
-            clientMessage
-            expiresAt
-            features{
-              bookingQuestionsEnabled
-              giftCardPurchaseEnabled
-              paymentInfoRequired
-              serviceAddonsEnabled
-            }
-            summary{
-              deposit
-              depositAmount
-              discountAmount
-              gratuityAmount
-              paymentMethodRequired
-              roundingAmount
-              subtotal
-              taxAmount
-              total
-            }
-            bookingQuestions{
-              id
-              key
-              label
-              required
-            }
-            clientInformation{
-              email
-              firstName
-              lastName
-              phoneNumber
-              externalId
-            }
-            location{
-              id
-              name
-              address {
-                city
-                country
-                line1
-                line2
-                state
-              }
-              businessName
-            }
           }
       }
   }`;
@@ -220,11 +176,6 @@ const AVAILABLE_SERVICES = `query serviceList($id:ID!){
                 name
                 description
                 listPrice
-                listPriceRange{
-                    min
-                    max
-                    variable
-                }
             }
         }
     }
@@ -236,102 +187,7 @@ const ADD_SERVICE_TO_CART = `
     addCartSelectedBookableItem(input: $input) {
       cart {
         id
-        expiresAt
-        selectedItems {
-          id
-          price
-          ... on CartBookableItem {
-            item {
-              id
-              name
-              optionGroups {
-                id
-                name
-              }
-            }
-            guest {
-              email
-              firstName
-              id
-              label
-              lastName
-              number
-              phoneNumber
-            }
-            guestId
-            selectedOptions {
-              id
-              name
-              priceDelta
-              groupId
-              durationDelta
-              description
-            }
-          }
-          addons {
-            id
-            name
-            description
-            disabled
-            disabledDescription
-            listPrice
-            listPriceRange {
-              min
-              max
-              variable
-            }
-            ... on CartAvailableBookableItem {
-              optionGroups {
-                id
-                name
-                description
-                options {
-                  id
-                  name
-                  description
-                  durationDelta
-                  priceDelta
-                }
-              }
-            }
-          }
-          item {
-            id
-            name
-            description
-            disabled
-            disabledDescription
-          }
-        }
-        summary {
-          deposit
-          depositAmount
-          discountAmount
-          gratuityAmount
-          paymentMethodRequired
-          roundingAmount
-          subtotal
-          taxAmount
-          total
-        }
-        bookingQuestions {
-          id
-          key
-          label
-          required
-        }
-        clientInformation {
-          email
-          firstName
-          lastName
-          phoneNumber
-          externalId
-        }
-        location {
-          id
-          name
-          businessName
-        }
+      
       }
     }
   }
@@ -542,8 +398,13 @@ server.tool("availableServices", "Get available services", {
     const data = await gql(AVAILABLE_SERVICES, 'CLIENT', { id: cartId });
   
   
+    const EXCLUDED_CATEGORIES = ["memberships", "packages", "products", "gift cards"];
+  
+    const filteredCategories = data.cart.availableCategories.filter(cat => {
+      return !EXCLUDED_CATEGORIES.includes(cat.name?.toLowerCase());
+    });
     // console.error("available services:", JSON.stringify(data, null, 2));  // const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    return { content: [{ type: "text", text: JSON.stringify(filteredCategories) }] };
 });
 
 
