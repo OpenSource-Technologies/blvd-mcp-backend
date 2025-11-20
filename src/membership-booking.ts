@@ -539,7 +539,15 @@ server.tool(
   "Get available locations for the business",
   async () =>{
     const data = await gql(GQL_LOCATIONS, 'CLIENT', { businessId: BLVD_BUSINESS_ID });
-    const locations = data?.locations?.edges ?? [];
+    // const locations = data?.locations?.edges ?? [];
+
+    const locations = {
+      locations: data?.locations?.edges?.map(e => ({
+        id: e?.node?.id,
+        name: e?.node?.name || e?.node?.businessName,
+        city: e?.node?.address?.city,
+      })) ?? []
+  };
     return { content: [{ type: "text", text: JSON.stringify(locations) }] };
   }
 );
@@ -548,11 +556,8 @@ server.tool(
   "getMembershipPlans",
   "Get available membership plans",
   async () =>{
-    console.error("innnnn");
     const data = await gql(GQL_LIST_MEMBERSHIP_PLANS, 'ADMIN', { businessId: BLVD_BUSINESS_ID });
-    console.error("membershipdata >> ",data)
-    // const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    return { content: [{ type: "text", text: JSON.stringify(data.membershipPlans.edges) }] };
   }
 );
 
@@ -573,14 +578,20 @@ server.tool(
   "addMemberhipToCart",
   "Add a membership plan to an existing cart",
   {
-    id: z.string().describe("existing cart id"),
+    id: z.string().describe("existing cartId"),
     itemId: z.string().describe("membership product id")
   },
   async ({id, itemId}) =>{
+    console.error("cartId >> ",id);
+
+    console.error("itemId >> ",itemId);
     const data = await gql(ADD_MEMBERSHIP_TO_CART, 'CLIENT', { input: {
         "id":id,
         "itemId":itemId
       } });
+
+      console.error("addMemberhipToCart >> ",data);
+
     // const locations = data?.locations?.edges ?? [];
     return { content: [{ type: "text", text: JSON.stringify(data) }] };
   }

@@ -35,6 +35,14 @@ export class ChatService implements OnModuleInit {
 
   private conversationHistory:any;
 
+  private moduleMap: Record<string, string> = {
+    gift: 'dist/giftcard-purchase.js',
+    membership: 'dist/membership-booking.js',
+    booking: 'dist/appointment-booking.js',
+  };
+
+  private moduleName:any;
+
   constructor() {
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
@@ -44,10 +52,14 @@ export class ChatService implements OnModuleInit {
 
 
   private async initMCP(module:any) {
+
+    this.moduleName = module;
+    const moduleFile = this.moduleMap[module] ?? 'dist/appointment-booking.js';
+
     this.transport = new StdioClientTransport({
       command: 'node',
      // args: ['dist/appointment-booking.js','dist/giftcard-purchase.js'],
-     args: module=='gift'?['dist/giftcard-purchase.js']:['dist/appointment-booking.js'],
+     args: [moduleFile],
       stderr: 'inherit',
     });
 
@@ -171,13 +183,25 @@ export class ChatService implements OnModuleInit {
     let intent: any = "";
     intent = this.detectAssistant(userMessage, this.conversationHistory);
   
-    if (!this.mcpClient) await this.initMCP(this.conversationHistory);
-  
-    if (this.conversationHistory === "gift") {
-      this.assistantId = process.env.GIFT_ASSISTANT_ID!;
-    } else {
-      this.assistantId = process.env.BOOKING_ASSISTANT_ID!;
-    }
+    if (!this.mcpClient || this.moduleName!=this.conversationHistory) await this.initMCP(this.conversationHistory);
+      
+      console.log("intentintent  >> ",intent);
+      console.log("conversationHistory >> ",this.conversationHistory)
+
+      if(!this.conversationHistory){
+        this.assistantId = process.env.DEFAULT_ASSISTANT_ID!;
+      }else
+      if (this.conversationHistory === 'gift') {
+          this.assistantId = process.env.GIFT_ASSISTANT_ID!;
+          console.log("🎁 Using Gift Card Assistant");
+      } else
+      if (this.conversationHistory === "membership"){
+          this.assistantId = process.env.MEMBERSHIP_ASSISTANT_ID!;
+      }else
+      {
+          this.assistantId = process.env.BOOKING_ASSISTANT_ID!;
+          console.log("💇 Using Booking Assistant");
+      }
   
     await this.checkAndResetThread(sessionId);
   
@@ -414,6 +438,28 @@ export class ChatService implements OnModuleInit {
           })),
         };
 
+
+        /* for membership start */
+      case 'getMembershipPlans':
+        return {
+          membership: (Array.isArray(rawResult) ? rawResult : []).map((item: any) => ({
+            id: item.node.id,
+            name: item.node.name,
+            price: item.node.unitPrice,
+          })),
+        };
+
+        case 'addMemberhipToCart':
+          return {
+            membership: (Array.isArray(rawResult) ? rawResult : []).map((item: any) => ({
+              id: item.node.id,
+              name: item.node.name,
+              price: item.node.unitPrice,
+            })),
+          };
+
+      /*membership end*/
+
       default:
         return { 
           status: 'Completed', 
@@ -641,6 +687,7 @@ if (toolCall.function?.arguments) {
     // ----------------------- CART ID -----------------------
     // console.log("🔍 Checking for cartId sources...");
   
+    console.log("toolOutput 222 >> ",toolOutput);
     if (typeof toolOutput.createCart?.cart?.id === 'string') {
       console.log("🟢 cartId from createCart:", toolOutput.createCart.cart.id);
       setIf('cartId', toolOutput.createCart.cart.id);
@@ -741,6 +788,11 @@ if (toolCall.function?.arguments) {
     }
   
     console.log("🟢 Updated session state:", JSON.stringify(s, null, 2));
+    if(s.cartId){
+      setIf('cartId', s.cartId);
+    }
+      
+
     console.log("🟩 extractStateFromToolOutput() END ------------------------");
   }
   
@@ -787,6 +839,10 @@ if (toolCall.function?.arguments) {
     if (!process.env.GIFT_ASSISTANT_ID)
       throw new Error("GIFT_ASSISTANT_ID missing");
   
+    if (!process.env.MEMBERSHIP_ASSISTANT_ID)
+      throw new Error("MEMBERSHIP_ASSISTANT_ID missing");
+  
+
     console.log("✅ Assistants ready");
     
     console.log('🔍 OpenAI SDK initialized:', {
