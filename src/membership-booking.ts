@@ -232,9 +232,13 @@ const CREATE_CART = `mutation createCart($input:CreateCartInput!){
 
 const ADD_MEMBERSHIP_TO_CART = `mutation addCartSelectedPurchasableItem($input:AddCartSelectedPurchasableItemInput!){
       addCartSelectedPurchasableItem(input:$input){
-        cart {
-          id
-        }
+       cart {
+  id
+  selectedItems {
+        id
+  }
+}
+
       }
     }`;
 

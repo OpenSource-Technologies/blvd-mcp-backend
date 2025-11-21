@@ -554,15 +554,19 @@ if (toolCall.function?.arguments) {
     let args = JSON.parse(toolCall.function.arguments);
     const correctCartId = this.sessionState[sessionId]?.cartId;
 
+    console.log("sessionState",this.sessionState[sessionId]);
+    console.log("correctCartId",correctCartId);
+    console.log("args",args);
+    
+
     if (correctCartId) {
-      // Many BLVD tools use "cartId"
-      if (args.cartId && args.cartId !== correctCartId) {
-        console.log("🔧 Fixing cartId → session cartId:", correctCartId);
-        args.cartId = correctCartId;
-      }
+
+      args.id=correctCartId;
+      args.cartId = correctCartId;
+      console.log("i called",args);
 
       // Some tools (like addGiftCardToCart) use "id"
-      if (args.id && args.id.startsWith("urn:blvd:Cart:") && args.id !== correctCartId) {
+      if (args.cartId && args.cartId !== correctCartId) {
         console.log("🔧 Fixing id → session cartId:", correctCartId);
         args.id = correctCartId;
       }
