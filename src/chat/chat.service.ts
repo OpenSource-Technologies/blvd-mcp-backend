@@ -313,7 +313,7 @@ export class ChatService implements OnModuleInit {
     if (text.includes("[[SHOW_PAY_BUTTON]]")) {
       return {
         type: "SHOW_PAY_BUTTON",
-        checkoutUrl: `https://blvd-chatbot.ostlive.com/checkout?email=${this.sessionState.clientEmail}&amount=${this.sessionState.totalAmount}`
+        checkoutUrl: `${process.env.CHECKOUT_LINK}/?email=${this.sessionState.clientEmail}&amount=${this.sessionState.totalAmount}`
       };
     }
   
@@ -593,14 +593,15 @@ if (toolCall.function?.arguments) {
           // ✅ Extract cartId / email into session state
           this.extractStateFromToolOutput(parsedOutput, sessionId);
         
-          const s = this.sessionState[sessionId];
+          const item = this.sessionState[sessionId];
+          console.log("setClientOut >> ",item)
         
           return {
             reply: {
               role: "assistant",
               frontendAction: {
                 type: "SHOW_PAY_BUTTON",
-                checkoutUrl: `https://blvd-chatbot.ostlive.com/checkout?email=${s.clientEmail}&amount=${s.totalAmount}`
+                checkoutUrl: `${process.env.CHECKOUT_LINK}/?email=${item.clientEmail}&amount=${item.totalAmount}`
               },
               content: "You're all set! Tap the button below to complete your payment."
             }
@@ -697,6 +698,11 @@ if (toolCall.function?.arguments) {
     if (typeof toolOutput.createCart?.cart?.id === 'string') {
       console.log("🟢 cartId from createCart:", toolOutput.createCart.cart.id);
       setIf('cartId', toolOutput.createCart.cart.id);
+    }
+
+    if (typeof toolOutput.listPrice === 'number') {
+      console.log("🟢 cartId from createCart:", toolOutput.listPrice);
+      setIf('totalAmount', toolOutput.listPrice/100);
     }
   
     if (typeof toolOutput.updateCart?.cart?.id === 'string') {
@@ -855,5 +861,14 @@ if (toolCall.function?.arguments) {
       hasBeta: !!this.openai?.beta,
       threadsRuns: !!this.openai?.beta?.threads?.runs,
     });
+  }
+
+  async cleanupAfterCheckout(sessionId:any) {
+    if (this.sessionState[sessionId]) {
+      delete this.sessionState[sessionId].threadId;
+      this.sessionState[sessionId].messageCount = 0;
+      this.conversationHistory = null;
+    }
+    console.log("🧹 Thread cleaned for session:", sessionId);
   }
 }

@@ -54,6 +54,8 @@ const content =
   `Total: $${total}\n\n` +
   `🙏 Thank you for your purchase!`;
 
+  this.chatService.cleanupAfterCheckout("default");
+
 // 6. Wrap in reply object
 return {
   reply: {
