@@ -142,13 +142,15 @@ export class ChatService implements OnModuleInit {
       this.conversationHistory = "membership";
       return 'membership';
     }
-    if (lower.includes('book') || lower.includes('appointment') || lower.includes('service') || lower.includes('schedule')) {
-      this.conversationHistory = "booking";
-      return 'booking';
-    }
+
     if (lower.includes('gift') || lower.includes('giftcard')) {
       this.conversationHistory = "gift";
       return 'gift';
+    }
+    
+    if (lower.includes('book') || lower.includes('appointment') || lower.includes('service') || lower.includes('schedule')) {
+      this.conversationHistory = "booking";
+      return 'booking';
     }
   
     // default to booking if unsure
