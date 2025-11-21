@@ -16,6 +16,7 @@ interface SessionState {
   totalAmount?: number;
   awaitingClientDetails?: boolean;
   messageCount?: number; // Track message count for thread cleanup
+  sessionToken?: any
 }
 
 @Injectable()
@@ -35,6 +36,8 @@ export class ChatService implements OnModuleInit {
 
   private conversationHistory:any;
 
+  private sessionToken:any;
+
   private moduleMap: Record<string, string> = {
     gift: 'dist/giftcard-purchase.js',
     membership: 'dist/membership-booking.js',
@@ -44,12 +47,16 @@ export class ChatService implements OnModuleInit {
   private moduleName:any;
 
   constructor() {
+    this.sessionToken = this.tokenGenerate();
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
 
 
 
 
+  tokenGenerate(){
+    return Math.random().toString(36).substring(2, 10);
+  }
 
   private async initMCP(module:any) {
 
@@ -119,6 +126,7 @@ export class ChatService implements OnModuleInit {
           .then((thread: any) => {
             this.sessionState[sessionId].threadId = thread.id;
             this.sessionState[sessionId].messageCount = 0;
+            this.sessionState[sessionId].sessionToken = this.sessionToken
             delete this.creatingThread[sessionId];
             console.log(`✨ Created new thread: ${thread.id} for session ${sessionId}`);
             return thread.id;
@@ -313,7 +321,7 @@ export class ChatService implements OnModuleInit {
     if (text.includes("[[SHOW_PAY_BUTTON]]")) {
       return {
         type: "SHOW_PAY_BUTTON",
-        checkoutUrl: `${process.env.CHECKOUT_LINK}/?email=${this.sessionState.clientEmail}&amount=${this.sessionState.totalAmount}`
+        checkoutUrl: `${process.env.CHECKOUT_LINK}/?email=${this.sessionState.clientEmail}&amount=${this.sessionState.totalAmount}&token=${this.sessionState.sessionToken}`
       };
     }
   
@@ -601,7 +609,7 @@ if (toolCall.function?.arguments) {
               role: "assistant",
               frontendAction: {
                 type: "SHOW_PAY_BUTTON",
-                checkoutUrl: `${process.env.CHECKOUT_LINK}/?email=${item.clientEmail}&amount=${item.totalAmount}`
+                checkoutUrl: `${process.env.CHECKOUT_LINK}/?email=${item.clientEmail}&amount=${item.totalAmount}&token=${item.sessionToken}`
               },
               content: "You're all set! Tap the button below to complete your payment."
             }
@@ -868,6 +876,7 @@ if (toolCall.function?.arguments) {
       delete this.sessionState[sessionId].threadId;
       this.sessionState[sessionId].messageCount = 0;
       this.conversationHistory = null;
+      this.sessionToken = this.tokenGenerate();
     }
     console.log("🧹 Thread cleaned for session:", sessionId);
   }
