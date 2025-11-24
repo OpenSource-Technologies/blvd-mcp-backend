@@ -390,14 +390,14 @@ export class ChatService implements OnModuleInit {
           })),
         };
         
-        case 'cartBookableStaffVariants':
-          return {
-            staff: rawResult?.map((s: any) => ({
-              id: s.id,
-              name: s.staff?.name,
-              preference: s.staffSelectionPreference || 'None',
-            })) || [],
-          };
+        // case 'cartBookableStaffVariants':
+        //   return {
+        //     staff: rawResult?.map((s: any) => ({
+        //       id: s.id,
+        //       name: s.staff?.name,
+        //       preference: s.staffSelectionPreference || 'None',
+        //     })) || [],
+        //   };
    
       
       case 'getCartSummary':
