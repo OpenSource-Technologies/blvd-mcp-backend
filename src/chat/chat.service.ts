@@ -740,6 +740,10 @@ if (toolCall.function?.arguments) {
     if (typeof toolOutput.updateCart?.cart?.id === 'string') {
       console.log("🟢 cartId from updateCart:", toolOutput.updateCart.cart.id);
       setIf('cartId', toolOutput.updateCart.cart.id);
+    
+      if(toolOutput.updateCart.cart.summary){
+        setIf('totalAmount', toolOutput.updateCart.cart.summary.total/100);
+      }
     }
   
     if (typeof toolOutput.cartId === 'string') {
