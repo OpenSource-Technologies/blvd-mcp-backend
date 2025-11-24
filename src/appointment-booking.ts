@@ -186,7 +186,9 @@ const ADD_SERVICE_TO_CART = `
     addCartSelectedBookableItem(input: $input) {
       cart {
         id
-      
+         selectedItems {
+          id
+        }
       }
     }
   }
@@ -766,18 +768,9 @@ server.tool(
       query CartBookableStaffVariants($id: ID!, $itemId: ID!, $bookableTimeId: ID!) {
         cartBookableStaffVariants(id: $id, itemId: $itemId, bookableTimeId: $bookableTimeId) {
           id
-          duration
-          price
           staff {
             id
             displayName
-            firstName
-            lastName
-            bio
-            role {
-              id
-              name
-            }
           }
         }
       }

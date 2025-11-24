@@ -390,14 +390,15 @@ export class ChatService implements OnModuleInit {
           })),
         };
         
-      case 'cartBookableStaffVariants':
-        return {
-          staff: rawResult.staffVariants?.map((s: any) => ({
-            id: s.id,
-            name: s.staff?.name,
-            preference: s.staffSelectionPreference || 'None',
-          })) || [],
-        };
+        case 'cartBookableStaffVariants':
+          return {
+            staff: rawResult?.map((s: any) => ({
+              id: s.id,
+              name: s.staff?.name,
+              preference: s.staffSelectionPreference || 'None',
+            })) || [],
+          };
+   
       
       case 'getCartSummary':
         // Handle your MCP structure (data is at root level after parsing)
@@ -580,6 +581,29 @@ if (toolCall.function?.arguments) {
       }
     }
 
+
+    if (toolName === 'cartBookableStaffVariants') {
+
+      console.log("i in cartBookableStaffVariants");
+      
+        const serviceItemId = this.sessionState[sessionId]?.serviceItemId;
+      
+        console.log("🔍 serviceItemId from session =", serviceItemId);
+      
+        if (serviceItemId) {
+          // Force correct value
+          args.itemId = serviceItemId;
+          
+          console.log("🔥 Overriding addServiceToCart args with correct serviceItemId:", serviceItemId);
+        } else {
+          console.warn("⚠️ WARNING: addServiceToCart called but serviceItemId is missing!");
+        }
+      }
+
+
+
+
+
     toolCall.function.arguments = JSON.stringify(args);
   } catch (err) {
     console.error("❌ Failed parsing tool arguments:", err);
@@ -753,6 +777,36 @@ if (toolCall.function?.arguments) {
     } catch (err) {
       console.log("❌ Error processing selectedItems", err);
     }
+
+
+
+
+
+    // ----------------------- HANDLE addCartSelectedBookableItem -----------------------
+if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
+  
+  console.log("i enetred");
+  
+  const sel = toolOutput.addCartSelectedBookableItem.cart.selectedItems;
+  console.log("(addCartSelectedBookableItem):", sel);
+
+
+  
+  console.log("SERVICE ITEM STORED =", this.sessionState[sessionId].serviceItemId);
+
+
+  if (Array.isArray(sel) && sel.length > 0) {
+    const top = sel[0];
+
+    if (typeof top.id === 'string') setIf('serviceItemId', top.id);
+    if (typeof top.staffVariantId === 'string') setIf('staffVariantId', top.staffVariantId);
+  }
+}
+
+  
+
+      
+
   
     // ----------------------- BOOKABLE TIME -----------------------
     try {
