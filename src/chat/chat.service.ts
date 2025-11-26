@@ -374,16 +374,35 @@ export class ChatService implements OnModuleInit {
           })) || [],
         };
 
+      // case 'availableServices':
+      //   // Handle the nested structure from your MCP server
+      //   const categories = rawResult.cart?.availableCategories || [];
+      //   const services = categories.flatMap((cat: any) => 
+      //     (cat.availableItems || []).map((item: any) => ({
+      //       id: item.id,
+      //       name: item.name,
+      //       price: item.listPrice,
+      //     }))
+      //   );
+      //   return { services };
+
       case 'availableServices':
         // Handle the nested structure from your MCP server
-        const categories = rawResult.cart?.availableCategories || [];
+        const categories = rawResult || [];
+
         const services = categories.flatMap((cat: any) => 
           (cat.availableItems || []).map((item: any) => ({
-            id: item.id,
-            name: item.name,
-            price: item.listPrice,
+            categoryName: cat.name,
+            items: (cat.availableItems || []).map(item => ({
+              id: item.id,
+              name: item.name,
+              price: item.listPrice
+            }))
           }))
         );
+
+        console.log("servicesservices  >> ",services);
+
         return { services };
 
       case 'cartBookableDates':

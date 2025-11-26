@@ -170,6 +170,7 @@ const AVAILABLE_SERVICES = `query serviceList($id:ID!){
     cart(id:$id){
         availableCategories{
             id
+            name
             availableItems{
                 id
                 name
@@ -397,10 +398,27 @@ server.tool("availableServices", "Get available services", {
 }, async ({ cartId }) => {
   
     const data = await gql(AVAILABLE_SERVICES, 'CLIENT', { id: cartId });
-  
+
+    //const excluded = ["gift cards", "memberships", "packages","products"];
+
+    const excludeList = ["gift cards", "memberships", "packages", "products"];
+
+const filteredCategories = data.cart.availableCategories.filter(cat =>
+  !excludeList.includes(cat?.name?.toLowerCase())
+);
+
+    // const filteredCategories = data.cart.availableCategories.find(c => {
+    //   const name = c?.name?.toLowerCase() || "";
+    //   return !excluded.includes(name);
+    // });
+
+    // console.error("rrrrrrrrr >> ",JSON.stringify(data));
+    
+    // console.error("filteredCategories  >> ",JSON.stringify(filteredCategories));
+    
   
     // console.error("available services:", JSON.stringify(data, null, 2));  // const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    return { content: [{ type: "text", text: JSON.stringify(filteredCategories) }] };
 });
 
 
@@ -446,7 +464,7 @@ server.tool("cartBookableDates", "First 15 bookable dates for the cart", {
 
 
   const next15 = new Date();
-  next15.setDate(today.getDate() + 15);
+  next15.setDate(today.getDate() + 7);
 
 const searchRangeUpper = next15.toISOString().split("T")[0];
 
@@ -469,7 +487,7 @@ const searchRangeUpper = next15.toISOString().split("T")[0];
     return { content: [{ type: "text", text: JSON.stringify(dates) }] };
 });
 
-server.tool("cartBookableTimes", "First 15 available times for the cart and date as array of slot objects", {
+server.tool("cartBookableTimes", "First 7 available times for the cart and date as array of slot objects", {
     cartId: z.string().describe("existing cart id"),
     searchDate: z.string().describe("search date in format YYYY-MM-DD"),
 }, async ({ cartId, searchDate }) => {
