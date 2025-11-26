@@ -442,13 +442,41 @@ export class ChatService implements OnModuleInit {
           message: `${toolName} completed.` 
         };
         
-      case 'applyPromotionCode':
-        return {
-          status: 'Success',
-          cartId: rawResult.addCartOffer?.cart?.id,
-          promotionCode: rawResult.addCartOffer?.offer?.code,
-          message: 'Promotion applied successfully'
-        };
+        case 'applyPromotionCode': {
+
+            console.log("🟡 DEBUG → rawResult for applyPromotionCode:", JSON.stringify(rawResult, null, 2));
+        
+            // HANDLE ARRAY ERROR OUTPUT
+            if (
+                Array.isArray(rawResult) &&
+                rawResult[0]?.__typename === "BlvdError"
+            ) {
+                return {
+                    status: "Error",
+                    code: rawResult[0]?.code,
+                    message: rawResult[0]?.message || "Invalid promotion code"
+                };
+            }
+        
+            // HANDLE NORMAL ERROR FORMAT
+            if (rawResult?.errors || rawResult?.error || rawResult?.code) {
+                console.log("i enter");
+                return {
+                    status: "Error",
+                    code: rawResult?.code,
+                    message: rawResult?.message || "Invalid promotion code"
+                };
+            }
+        
+            // SUCCESS CASE
+            return {
+                status: "Success",
+                cartId: rawResult.addCartOffer?.cart?.id,
+                promotionCode: rawResult.addCartOffer?.offer?.code,
+                message: "Promotion applied successfully"
+            };
+        }
+        
         
       case 'cartBookableStaffVariants':
         // Return minimal staff info
