@@ -58,13 +58,6 @@ export class ChatService implements OnModuleInit {
     return Math.random().toString(36).substring(2, 10);
   }
 
-  getTodayDate() {
-    const today = new Date();
-    console.log("getTodayDate >> ",today)
-    return today.toISOString().split("T")[0]; 
-  }
-  
-
   private async initMCP(module:any) {
 
     this.moduleName = module;
@@ -134,6 +127,7 @@ export class ChatService implements OnModuleInit {
             this.sessionState[sessionId].threadId = thread.id;
             this.sessionState[sessionId].messageCount = 0;
             this.sessionState[sessionId].sessionToken = this.sessionToken
+            this.conversationHistory=null;
             delete this.creatingThread[sessionId];
             console.log(`✨ Created new thread: ${thread.id} for session ${sessionId}`);
             return thread.id;
@@ -149,9 +143,10 @@ export class ChatService implements OnModuleInit {
     return this.sessionState[sessionId].threadId!;
   }
 
-  private detectAssistant(userMessage: string, currentIntent:any){
+  private detectAssistant(userMessage: string,  sessionId: string){
     const lower = userMessage.toLowerCase();
-
+    const state = this.sessionState[sessionId];
+  
   
     if (lower.includes('membership') || lower.includes('member') || lower.includes('package') || lower.includes('plan')) {
       this.conversationHistory = "membership";
@@ -194,35 +189,44 @@ export class ChatService implements OnModuleInit {
 
   public async sendMessage(
     userMessage: string,
-    sessionId = "default"
+    sessionId :string
   ): Promise<{ reply: any }> {
   
     let intent: any = "";
-    intent = this.detectAssistant(userMessage, this.conversationHistory);
-  
+
+    const threadId = await this.ensureThreadForSession(sessionId);
+    
+
+    intent = this.detectAssistant(userMessage, sessionId);
+    
+    console.log("intent",intent);
+    
     if (!this.mcpClient || this.moduleName!=this.conversationHistory) await this.initMCP(this.conversationHistory);
       
+    if (intent) {
+      this.conversationHistory = intent;
+    }
+
       console.log("intentintent  >> ",intent);
       console.log("conversationHistory >> ",this.conversationHistory)
 
-      if(!this.conversationHistory){
+      if (!this.conversationHistory) {
+        // New session → always use Booking assistant for default greeting
         this.assistantId = process.env.DEFAULT_ASSISTANT_ID!;
-      }else
-      if (this.conversationHistory === 'gift') {
-          this.assistantId = process.env.GIFT_ASSISTANT_ID!;
-          console.log("🎁 Using Gift Card Assistant");
-      } else
-      if (this.conversationHistory === "membership"){
-          this.assistantId = process.env.MEMBERSHIP_ASSISTANT_ID!;
-      }else
-      {
-          this.assistantId = process.env.BOOKING_ASSISTANT_ID!;
-          console.log("💇 Using Booking Assistant");
+      } else if (this.conversationHistory === 'gift') {
+        this.assistantId = process.env.GIFT_ASSISTANT_ID!;
+        console.log("🎁 Using Gift Card Assistant");
+      } else if (this.conversationHistory === 'membership') {
+        this.assistantId = process.env.MEMBERSHIP_ASSISTANT_ID!;
+      } else {
+        this.assistantId = process.env.BOOKING_ASSISTANT_ID!;
+        console.log("💇 Using Booking Assistant");
       }
+      
+      console.log("assistantId",this.assistantId);
   
     await this.checkAndResetThread(sessionId);
   
-    const threadId = await this.ensureThreadForSession(sessionId);
     if (!threadId) {
       return {
         reply: {
@@ -405,7 +409,7 @@ export class ChatService implements OnModuleInit {
         //       preference: s.staffSelectionPreference || 'None',
         //     })) || [],
         //   };
-   
+  
       
       case 'getCartSummary':
         // Handle your MCP structure (data is at root level after parsing)
@@ -689,7 +693,7 @@ if (toolCall.function?.arguments) {
     return currentRun;
   }
   
-  private extractStateFromToolOutput(toolOutput: any, sessionId = 'default') {
+  private extractStateFromToolOutput(toolOutput: any, sessionId :string) {
     // console.log("🟦 extractStateFromToolOutput() CALLED ------------------------");
     // console.log("🔵 Raw toolOutput:", JSON.stringify(toolOutput, null, 2));
   
@@ -881,7 +885,7 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
     console.log("🟩 extractStateFromToolOutput() END ------------------------");
   }
   
-  public async setPaymentToken(token: string, sessionId = 'default') {
+  public async setPaymentToken(token: string, sessionId :string) {
     const s = this.sessionState[sessionId];
     
     console.log("sssss",s);
@@ -909,10 +913,10 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
     return checkoutResult;
   }
 
-  public clearSession(sessionId = 'default') {
-    delete this.sessionState[sessionId];
-    delete this.creatingThread[sessionId];
-  }
+  // public clearSession(sessionId = 'default') {
+  //   delete this.sessionState[sessionId];
+  //   delete this.creatingThread[sessionId];
+  // }
 
   async onModuleInit() {
    // await this.initMCP();
