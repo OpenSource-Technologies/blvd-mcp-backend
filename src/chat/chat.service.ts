@@ -30,7 +30,7 @@ export class ChatService implements OnModuleInit {
   private creatingThread: Record<string, Promise<string>> = {};
 
   // ⚙️ Configuration
-  private readonly MAX_MESSAGES_PER_THREAD = 8; // Reset thread after 20 messages
+  private readonly MAX_MESSAGES_PER_THREAD = 15; // Reset thread after 20 messages
   private readonly POLL_INTERVAL_MS = 2000; // Slower polling = fewer API calls
   private readonly MAX_POLL_ATTEMPTS = 30;
 
@@ -57,6 +57,13 @@ export class ChatService implements OnModuleInit {
   tokenGenerate(){
     return Math.random().toString(36).substring(2, 10);
   }
+
+  getTodayDate() {
+    const today = new Date();
+    console.log("getTodayDate >> ",today)
+    return today.toISOString().split("T")[0]; 
+  }
+  
 
   private async initMCP(module:any) {
 
