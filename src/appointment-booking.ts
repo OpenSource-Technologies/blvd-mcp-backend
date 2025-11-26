@@ -437,11 +437,20 @@ server.tool("addServiceToCart", "Add a service to an existing cart", {
 
 server.tool("cartBookableDates", "First 15 bookable dates for the cart", {
     cartId: z.string().describe("existing cart id"),
-    searchRangeLower: z.string().describe("lower range date in format YYYY-MM-DD"),
-    searchRangeUpper: z.string().describe("upper range date in format YYYY-MM-DD"),
-}, async ({ cartId, searchRangeLower, searchRangeUpper }) => {
+    // searchRangeLower: z.string().describe("lower range date in format YYYY-MM-DD"),
+    // searchRangeUpper: z.string().describe("upper range date in format YYYY-MM-DD"),
+}, async ({ cartId }) => {
     
-  
+  const today = new Date();
+  const searchRangeLower = today.toISOString().split("T")[0]; 
+
+
+  const next15 = new Date();
+  next15.setDate(today.getDate() + 15);
+
+const searchRangeUpper = next15.toISOString().split("T")[0];
+
+
   const data = await gql(CART_BOOKABLE_DATES, 'CLIENT', {
         "id": cartId,
         "searchRangeLower": searchRangeLower,
@@ -451,6 +460,8 @@ server.tool("cartBookableDates", "First 15 bookable dates for the cart", {
 
     });
     
+    console.error("searchRangeLower  >> ",searchRangeLower);
+    console.error("searchRangeUpper  >> ",searchRangeUpper);
     // Expecting data.cartBookableDates to be an array of {date: string}
     const dates = (data?.cartBookableDates || []).map(d => d.date).slice(0, 5);
     console.error(data);
@@ -858,6 +869,9 @@ server.tool("checkAvailability", "Check availability for a given service and dat
       const today = new Date();
       const rangeLower = today.toISOString().split('T')[0];
       const rangeUpper = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+      console.log("searchRangeLower check >> ",rangeLower);
+      console.log("rangeUpper check >> ",rangeUpper);
       
       const availableDates = await gql(CART_BOOKABLE_DATES, 'CLIENT', {
         id: cartId,
