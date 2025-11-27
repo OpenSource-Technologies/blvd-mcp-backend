@@ -538,6 +538,51 @@ const APPLY_PROMOTION_CODE = `mutation addCartOffer($input:AddCartOfferInput!){
   }
   `;
 
+
+
+
+const GET_CART_SUMMARY = `
+query cart($id: ID!) {
+  cart(id: $id) {
+    id
+    expiresAt
+    selectedItems {
+      id
+      ... on CartBookableItem {
+        item {
+          id
+          name
+        }
+        selectedStaffVariant {
+          id
+          duration
+          price
+          staff {
+            displayName
+          }
+        }
+      }
+    }
+    summary {
+      subtotal
+      taxAmount
+      total
+    }
+    location {
+      name
+      businessName
+    }
+    clientInformation {
+      firstName
+      lastName
+      email
+      phoneNumber
+    }
+  }
+}
+`;
+
+
 server.tool(
   "getLocations",
   "Get available locations for the business",
@@ -564,6 +609,43 @@ server.tool(
     return { content: [{ type: "text", text: JSON.stringify(data.membershipPlans.edges) }] };
   }
 );
+
+
+
+server.tool(
+  "getCartSummary",
+  {
+    cartId: z.string().describe("Existing cart ID"),
+  },
+  async ({ cartId }) => {
+    console.log("🧾 MCP → getCartSummary called with:", cartId);
+
+    const data = await gql(GET_CART_SUMMARY, "CLIENT", { id: cartId });
+    const cart = data?.cart;
+
+    if (!cart) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Cart not found or expired.",
+          },
+        ],
+      };
+    }
+
+    // ✅ Simply return the backend response as-is
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(cart),
+        },
+      ],
+    };
+  }
+);
+
 
 server.tool(
   "createMembershipCart",
@@ -608,7 +690,7 @@ server.tool(
     cartId: z.string().describe("existing cart id"),
     firstName: z.string().describe("User first name"),
     lastName: z.string().describe("User last name"),
-    email: z.string().describe("User email"),
+    email: z.string().describe("User email in format: name@domain.com"),
     phoneNumber: z.string().describe("user phone number")
   },
   async ({cartId, firstName, lastName, email, phoneNumber}) =>{
