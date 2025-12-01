@@ -434,8 +434,11 @@ export class ChatService implements OnModuleInit {
         // Handle your MCP structure (data is at root level after parsing)
         return {
           cartId: rawResult.id,
-          totalAmount: rawResult.summary?.total,
+          subotalAmount: rawResult.summary?.subtotal,
           promotionCode: rawResult.promotionOffers?.[0]?.code,
+          discountAmount: rawResult.summary?.discountAmount,
+          taxAmount: rawResult.summary?.taxAmount,
+          totalAmount: rawResult.summary?.total,
           serviceItems: rawResult.selectedItems?.map((item: any) => ({
             serviceName: item.item?.name,
             staffName: item.selectedStaffVariant?.staff?.displayName,

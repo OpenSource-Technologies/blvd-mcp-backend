@@ -43,14 +43,16 @@ const summary = data.checkoutCart.cart.summary;
 
 // 4. Convert cents → dollars
 const subtotal = (summary.subtotal / 100).toFixed(2);
+const discount = (summary.discountAmount / 100).toFixed(2);
 const tax = (summary.taxAmount / 100).toFixed(2);
 const total = (summary.total / 100).toFixed(2);
 
 // 5. Build final content string
 const content =
-  `🧾 **Checkout Summary**\n` +
-  `Subtotal: $${subtotal}\n` +
-  `Tax: $${tax}\n` +
+  `🧾 **Checkout Summary**\n\n\n` +
+  `Subtotal: $${subtotal}\n\n` +
+  `Discount: $${discount}\n\n` +
+  `Tax: $${tax}\n\n` +
   `Total: $${total}\n\n` +
   `🙏 Thank you for your purchase!`;
 

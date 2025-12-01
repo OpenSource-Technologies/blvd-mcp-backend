@@ -275,10 +275,16 @@ query cart($id: ID!) {
       }
     }
     summary {
-      subtotal
-      taxAmount
-      total
-    }
+          deposit
+          depositAmount
+          discountAmount
+          gratuityAmount
+          paymentMethodRequired
+          roundingAmount
+          subtotal
+          taxAmount
+          total
+        }
     location {
       name
       businessName
