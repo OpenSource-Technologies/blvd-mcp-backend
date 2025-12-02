@@ -47,15 +47,18 @@ export class ChatService implements OnModuleInit {
   private moduleName:any;
 
   constructor() {
-    this.sessionToken = this.tokenGenerate();
+    //console.log("sessionToken in chat.service.ts",this.sessionToken);
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
 
 
 
 
-  tokenGenerate(){
-    return Math.random().toString(36).substring(2, 10);
+  tokenGenerate(sessionId:string){
+    let token = Math.random().toString(36).substring(2, 10);
+    this.sessionState[sessionId].sessionToken = token
+    console.log("token in chat.service.ts",token);
+    return token;
   }
 
   private async initMCP(module:any) {
@@ -126,7 +129,7 @@ export class ChatService implements OnModuleInit {
           .then((thread: any) => {
             this.sessionState[sessionId].threadId = thread.id;
             this.sessionState[sessionId].messageCount = 0;
-            this.sessionState[sessionId].sessionToken = this.sessionToken
+           // this.sessionState[sessionId].sessionToken = this.sessionToken
             this.conversationHistory=null;
             delete this.creatingThread[sessionId];
             console.log(`✨ Created new thread: ${thread.id} for session ${sessionId}`);
@@ -150,16 +153,19 @@ export class ChatService implements OnModuleInit {
   
     if (lower.includes('membership') || lower.includes('member') || lower.includes('package') || lower.includes('plan')) {
       this.conversationHistory = "membership";
+      this.sessionToken = this.tokenGenerate(sessionId);
       return 'membership';
     }
 
     if (lower.includes('gift') || lower.includes('giftcard')) {
       this.conversationHistory = "gift";
+      this.sessionToken = this.tokenGenerate(sessionId);
       return 'gift';
     }
     
     if (lower.includes('book') || lower.includes('appointment') || lower.includes('service') || lower.includes('schedule')) {
       this.conversationHistory = "booking";
+      this.sessionToken = this.tokenGenerate(sessionId);
       return 'booking';
     }
   
@@ -995,7 +1001,7 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
       delete this.sessionState[sessionId].threadId;
       this.sessionState[sessionId].messageCount = 0;
       this.conversationHistory = null;
-      this.sessionToken = this.tokenGenerate();
+     // this.sessionToken = this.tokenGenerate(sessionId);
     }
     console.log("🧹 Thread cleaned for session:", sessionId);
   }
