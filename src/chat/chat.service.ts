@@ -538,6 +538,18 @@ export class ChatService implements OnModuleInit {
 
       /*membership end*/
 
+
+      // /*********** giftcard start ***********/
+      // case 'createGiftCardCart':
+      //   console.log("createGiftCardCart rrrrrr >> ",rawResult);
+      //     return {
+      //       giftcard: (Array.isArray(rawResult) ? rawResult : []).map((item: any) => ({
+      //         cartId: rawResult.createCart?.cart?.id,
+      //       })),
+      //     };
+
+      // /*********** giftcard end ***********/
+
       default:
         return { 
           status: 'Completed', 
@@ -998,11 +1010,12 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
 
   async cleanupAfterCheckout(sessionId:any) {
     if (this.sessionState[sessionId]) {
-      delete this.sessionState[sessionId].threadId;
-      this.sessionState[sessionId].messageCount = 0;
+      // delete this.sessionState[sessionId].threadId;
+      // this.sessionState[sessionId].messageCount = 0;
       this.conversationHistory = null;
+      delete this.sessionState[sessionId];
      // this.sessionToken = this.tokenGenerate(sessionId);
     }
-    console.log("🧹 Thread cleaned for session:", sessionId);
+    console.log("🧹 Thread cleaned for session:", this.sessionState);
   }
 }
