@@ -36,6 +36,12 @@ export class ChatService implements OnModuleInit {
 
   private conversationHistory:any;
 
+  lastResolvedRangeLower:any;
+  lastResolvedRangeUpper:any; 
+  lastResolvedDate:any;
+
+
+
   private sessionToken:any;
 
   private moduleMap: Record<string, string> = {
@@ -411,6 +417,31 @@ export class ChatService implements OnModuleInit {
 
         return { services };
 
+
+        case 'resolveDateRange': {
+          // rawResult = string or object depending on your parser
+          let parsed;
+        
+          // If rawResult is a JSON string, parse it
+          if (typeof rawResult === "string") {
+            try {
+              parsed = JSON.parse(rawResult);
+            } catch {
+              parsed = {};
+            }
+          } else {
+            parsed = rawResult || {};
+          }
+        
+          return {
+            dates: {
+              resolvedDate: parsed.resolvedDate,
+              rangeLower: parsed.rangeLower,
+              rangeUpper: parsed.rangeUpper,
+            },
+          };
+        }  
+
       case 'cartBookableDates':
         // Your MCP returns array directly, not wrapped
         return {
@@ -659,6 +690,38 @@ if (toolCall.function?.arguments) {
         args.id = correctCartId;
       }
     }
+
+
+
+    if(toolName === 'resolveDateRange'){
+      const result: any = await this.executeMCPToolAndBuildPayload(toolCall, sessionId);
+        
+      // ✅ Parse correct payload for state extraction
+      let parsedOutput :any= {};
+      try {
+        parsedOutput = JSON.parse(result.output);
+        console.log("resolveDateRangeOutput",parsedOutput);
+        this.lastResolvedDate = parsedOutput?.dates.resolvedDate;
+        this.lastResolvedRangeLower = parsedOutput?.dates.rangeLower;
+        this.lastResolvedRangeUpper = parsedOutput?.dates.rangeUpper;
+      } catch {}
+    }
+
+    if(toolName === 'cartBookableDates'){
+    console.log("i enetred cartBookableDates");
+    console.log("lastResolvedRangeLower",this.lastResolvedRangeLower);
+    console.log("lastResolvedRangeUpper",this.lastResolvedRangeUpper);
+    args.searchRangeLower = this.lastResolvedRangeLower;
+    args.searchRangeUpper = this.lastResolvedRangeUpper;
+    }
+
+    if(toolName === 'cartBookableTimes'){
+      console.log("i enetred cartBookableTimes");
+      args.searchDate = this.lastResolvedRangeLower;
+      }
+  
+
+        
 
 
     if (toolName === 'cartBookableStaffVariants') {

@@ -35,6 +35,10 @@ const server = new McpServer({
         tools: {},
     },
 });
+
+var rangeLower :string = '' ;
+var rangeUpper :string = '';
+
 async function generate_guest_auth_header(api_key) {
     const payload = `${api_key}:`;
     const http_basic_credentials = Buffer.from(payload, "utf8").toString("base64");
@@ -459,33 +463,113 @@ server.tool("addServiceToCart", "Add a service to an existing cart", {
 });
 
 
+server.tool(
+  "resolveDateRange",
+  "Convert natural-language date like 'tomorrow' or 'upcoming Monday' into YYYY-MM-DD and return a bookable date range",
+  {
+    inputText: z.string().describe("User natural date, like: tomorrow, upcoming Monday, next Friday")
+  },
+  async ({ inputText }) => {
+
+    function getUpcomingWeekday(targetDayIndex: number) {
+      const today = new Date();
+      const todayIndex = today.getDay(); // 0 = Sun, 1 = Mon...
+      let diff = targetDayIndex - todayIndex;
+      if (diff <= 0) diff += 7; // next week's same day
+      const nextDate = new Date(today);
+      nextDate.setDate(today.getDate() + diff);
+      return nextDate;
+    }
+
+    const today = new Date();
+    let resolved :any= null;
+
+    const text = inputText.toLowerCase().trim();
+
+    if (text === "today") {
+      resolved = today;
+    } else if (text === "tomorrow") {
+      resolved = new Date(today);
+      resolved.setDate(today.getDate() + 1);
+    } else if (text === "day after tomorrow") {
+      resolved = new Date(today);
+      resolved.setDate(today.getDate() + 2);
+    } else if (text.includes("monday")) {
+      resolved = getUpcomingWeekday(1);
+    } else if (text.includes("tuesday")) {
+      resolved = getUpcomingWeekday(2);
+    } else if (text.includes("wednesday")) {
+      resolved = getUpcomingWeekday(3);
+    } else if (text.includes("thursday")) {
+      resolved = getUpcomingWeekday(4);
+    } else if (text.includes("friday")) {
+      resolved = getUpcomingWeekday(5);
+    } else if (text.includes("saturday")) {
+      resolved = getUpcomingWeekday(6);
+    } else if (text.includes("sunday")) {
+      resolved = getUpcomingWeekday(0);
+    } else {
+      // fallback: try to parse explicit date like "25 Dec" or "2025-12-10"
+      const parsed = new Date(inputText);
+      if (!isNaN(parsed.getTime())) resolved = parsed;
+    }
+
+    if (!resolved) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ error: "Unable to understand date" })
+          }
+        ]
+      };
+    }
+
+    const resolvedDate = resolved.toISOString().split("T")[0];
+
+    // Create a 15-day range for cartBookableDates
+    rangeLower = resolvedDate;
+    const rangeUpperDate = new Date(resolved);
+    rangeUpperDate.setDate(resolved.getDate() + 15);
+    rangeUpper = rangeUpperDate.toISOString().split("T")[0];
+
+    const result = { resolvedDate, rangeLower, rangeUpper };
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(result) }]
+    };
+  }
+);
+
+
+
 server.tool("cartBookableDates", "First 15 bookable dates for the cart", {
     cartId: z.string().describe("existing cart id"),
-    // searchRangeLower: z.string().describe("lower range date in format YYYY-MM-DD"),
-    // searchRangeUpper: z.string().describe("upper range date in format YYYY-MM-DD"),
 }, async ({ cartId }) => {
     
-  const today = new Date();
-  const searchRangeLower = today.toISOString().split("T")[0]; 
+  // const today = new Date();
+  // const searchRangeLower = today.toISOString().split("T")[0]; 
+  console.error("searchRangeLowerII  >> ",rangeLower);
+  console.error("searchRangeUpper  >> ",rangeUpper);
+ 
 
+  // const next15 = new Date();
+  // next15.setDate(today.getDate() + 7);
 
-  const next15 = new Date();
-  next15.setDate(today.getDate() + 7);
-
-const searchRangeUpper = next15.toISOString().split("T")[0];
+  // const searchRangeUpper = next15.toISOString().split("T")[0];
 
 
   const data = await gql(CART_BOOKABLE_DATES, 'CLIENT', {
         "id": cartId,
-        "searchRangeLower": searchRangeLower,
-        "searchRangeUpper": searchRangeUpper,
+        "searchRangeLower": rangeLower,
+        "searchRangeUpper": rangeUpper,
 
 
 
     });
     
-    console.error("searchRangeLower  >> ",searchRangeLower);
-    console.error("searchRangeUpper  >> ",searchRangeUpper);
+    console.error("searchRangeLower  >> ",rangeLower);
+    console.error("searchRangeUpper  >> ",rangeUpper);
     // Expecting data.cartBookableDates to be an array of {date: string}
     const dates = (data?.cartBookableDates || []).map(d => d.date).slice(0, 5);
     console.error(data);
@@ -976,20 +1060,57 @@ server.tool("checkAvailability", "Check availability for a given service and dat
 });
 
 
+
+
+// ✅ Email sanitizer + validator
+function normalizeEmail(raw: string): string {
+  return raw
+    ?.trim()
+    .replace(/\u200B/g, "")       // remove zero-width spaces
+    .normalize("NFKC")
+    .toLowerCase();
+}
+
+function isValidEmail(raw: string): boolean {
+  if (!raw) return false;
+
+  const email = normalizeEmail(raw);
+
+  // ✔ Modern TLD-safe regex for Blvd
+  const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
+  return emailRegex.test(email);
+}
+
 server.tool("setClientOnCart", "Attach client info to the cart before checkout", {
-    cartId: z.string().describe("existing cart id"),
-    firstName: z.string().describe("User first name"),
-    lastName: z.string().describe("User last name"),
-    email: z.string().describe("User email"),
-    phoneNumber: z.string().describe("user phone number")
+  cartId: z.string().describe("existing cart id"),
+  firstName: z.string().describe("User first name"),
+  lastName: z.string().describe("User last name"),
+  email: z.string().describe("User email"),
+  phoneNumber: z.string().describe("user phone number")
 }, async ({ cartId, firstName, lastName, email, phoneNumber }) => {
-    const data = await gql(SET_CLIENT_ON_CART, 'CLIENT', { input: {
-            "id": cartId,
-            "clientInformation": { firstName, lastName, email, phoneNumber }
-        } });
-    // const locations = data?.locations?.edges ?? [];
-    return { content: [{ type: "text", text: JSON.stringify(data) }] };
+  
+  // Normalize the email
+  const cleanedEmail = normalizeEmail(email);
+
+  
+  // Safe to send to Boulevard
+  const data = await gql(SET_CLIENT_ON_CART, "CLIENT", {
+      input: {
+          id: cartId,
+          clientInformation: {
+              firstName,
+              lastName,
+              email: cleanedEmail,
+              phoneNumber
+          }
+      }
+  });
+
+  return { content: [{ type: "text", text: JSON.stringify(data) }] };
 });
+
+
 server.tool("applyPromotionCode", "Apply a promo/discount code to the cart (optional)", {
     cartId: z.string().describe("existing cart id"),
     offerCode: z.string().describe("promotion code")
