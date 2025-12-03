@@ -463,6 +463,7 @@ server.tool("addServiceToCart", "Add a service to an existing cart", {
 });
 
 
+
 server.tool(
   "resolveDateRange",
   "Convert natural-language date like 'tomorrow' or 'upcoming Monday' into YYYY-MM-DD and return a bookable date range",
@@ -471,29 +472,40 @@ server.tool(
   },
   async ({ inputText }) => {
 
+    const today = new Date();
+    const text = inputText.toLowerCase().trim();
+    let resolved: Date | null = null;
+
+    // ----------- Helper: upcoming weekday (Mon=1..Sun=0) -----------
     function getUpcomingWeekday(targetDayIndex: number) {
-      const today = new Date();
-      const todayIndex = today.getDay(); // 0 = Sun, 1 = Mon...
+      const todayIndex = today.getDay();
       let diff = targetDayIndex - todayIndex;
-      if (diff <= 0) diff += 7; // next week's same day
-      const nextDate = new Date(today);
-      nextDate.setDate(today.getDate() + diff);
-      return nextDate;
+      if (diff <= 0) diff += 7;
+      const next = new Date(today);
+      next.setDate(today.getDate() + diff);
+      return next;
     }
 
-    const today = new Date();
-    let resolved :any= null;
+    // ----------- FIXED: Local safe YYYY-MM-DD -----------
+    function toISO(date: Date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
 
-    const text = inputText.toLowerCase().trim();
-
+    // ----------- 1. Natural language dates -----------
     if (text === "today") {
-      resolved = today;
+      resolved = new Date(today);
+
     } else if (text === "tomorrow") {
       resolved = new Date(today);
       resolved.setDate(today.getDate() + 1);
+
     } else if (text === "day after tomorrow") {
       resolved = new Date(today);
       resolved.setDate(today.getDate() + 2);
+
     } else if (text.includes("monday")) {
       resolved = getUpcomingWeekday(1);
     } else if (text.includes("tuesday")) {
@@ -508,12 +520,61 @@ server.tool(
       resolved = getUpcomingWeekday(6);
     } else if (text.includes("sunday")) {
       resolved = getUpcomingWeekday(0);
-    } else {
-      // fallback: try to parse explicit date like "25 Dec" or "2025-12-10"
-      const parsed = new Date(inputText);
-      if (!isNaN(parsed.getTime())) resolved = parsed;
     }
 
+    // ----------- 2. Explicit date formats (4 Dec, 4 Dec 2025) -----------
+    if (!resolved) {
+      const explicitRegex = /(\d{1,2})\s*([a-zA-Z]+)\s*(\d{4})?/;
+      const match = text.match(explicitRegex);
+
+      if (match) {
+        const day = parseInt(match[1], 10);
+        const monthName = match[2].substring(0, 3).toLowerCase();
+        const providedYear = match[3] ? parseInt(match[3], 10) : null;
+
+        const monthIndex = [
+          "jan", "feb", "mar", "apr", "may", "jun",
+          "jul", "aug", "sep", "oct", "nov", "dec"
+        ].indexOf(monthName);
+
+        if (monthIndex >= 0) {
+          const year = providedYear ?? today.getFullYear();
+          resolved = new Date(year, monthIndex, day);
+
+          // If no year provided & date already passed → move to next year
+          if (!providedYear && resolved < today) {
+            resolved = new Date(year + 1, monthIndex, day);
+          }
+        }
+      }
+    }
+
+    // ----------- 3. DD/MM or DD-MM formats (4/12, 4-12-2025) -----------
+    if (!resolved) {
+      const slashOrDash = text.match(/^(\d{1,2})[\/\-](\d{1,2})([\/\-](\d{4}))?$/);
+      if (slashOrDash) {
+        const day = parseInt(slashOrDash[1], 10);
+        const month = parseInt(slashOrDash[2], 10) - 1;
+        const providedYear = slashOrDash[4] ? parseInt(slashOrDash[4], 10) : null;
+
+        let year = providedYear ?? today.getFullYear();
+        resolved = new Date(year, month, day);
+
+        if (!providedYear && resolved < today) {
+          resolved = new Date(year + 1, month, day);
+        }
+      }
+    }
+
+    // ----------- 4. Fallback: JS Date (if valid) -----------
+    if (!resolved) {
+      const parsed = new Date(inputText);
+      if (!isNaN(parsed.getTime())) {
+        resolved = parsed;
+      }
+    }
+
+    // ----------- 5. If still not resolved → error -----------
     if (!resolved) {
       return {
         content: [
@@ -525,23 +586,24 @@ server.tool(
       };
     }
 
-    const resolvedDate = resolved.toISOString().split("T")[0];
+    // ----------- Create 15-day range -----------
+    const resolvedDate = toISO(resolved);
+    const rangeLower = resolvedDate;
 
-    // Create a 15-day range for cartBookableDates
-    rangeLower = resolvedDate;
-    const rangeUpperDate = new Date(resolved);
-    rangeUpperDate.setDate(resolved.getDate() + 15);
-    rangeUpper = rangeUpperDate.toISOString().split("T")[0];
-
-    const result = { resolvedDate, rangeLower, rangeUpper };
+    const upper = new Date(resolved);
+    upper.setDate(upper.getDate() + 15);
+    const rangeUpper = toISO(upper);
 
     return {
-      content: [{ type: "text", text: JSON.stringify(result) }]
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ resolvedDate, rangeLower, rangeUpper })
+        }
+      ]
     };
   }
 );
-
-
 
 server.tool("cartBookableDates", "First 15 bookable dates for the cart", {
     cartId: z.string().describe("existing cart id"),
