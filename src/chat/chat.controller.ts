@@ -48,13 +48,22 @@ const tax = (summary.taxAmount / 100).toFixed(2);
 const total = (summary.total / 100).toFixed(2);
 
 // 5. Build final content string
-const content =
-  `🧾 **Checkout Summary**\n\n\n` +
-  `Subtotal: $${subtotal}\n\n` +
-  `Discount: $${discount}\n\n` +
-  `Tax: $${tax}\n\n` +
-  `Total: $${total}\n\n` +
-  `🙏 Thank you for your purchase!`;
+// const content =
+//   `🧾 **Checkout Summary**\n\n\n` +
+//   `Subtotal: $${subtotal}\n\n` +
+//   `Discount: $${discount}\n\n` +
+//   `Tax: $${tax}\n\n` +
+//   `Total: $${total}\n\n` +
+//   `🙏 Thank you for your purchase!`;
+
+const lines = [
+  subtotal !== "0.00" ? `Subtotal: $${subtotal}` : "",
+  discount !== "0.00" ? `Discount: $${discount}` : "",
+  tax !== "0.00" ? `Tax: $${tax}` : "",
+  total !== "0.00" ? `Total: $${total}` : "",
+];
+
+const content = `🧾 **Checkout Summary**\n\n` + lines.filter(line => line !== "").join("\n\n") + `\n\n🙏 Thank you for your purchase!`;
 
   this.chatService.cleanupAfterCheckout(sessionId);
 
