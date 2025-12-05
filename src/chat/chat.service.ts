@@ -482,6 +482,7 @@ export class ChatService implements OnModuleInit {
             bookableTime: item.selectedBookableItem?.startTime,
           })) || [],
         };
+        
 
       case 'createAppointmentCart':
         return { 
