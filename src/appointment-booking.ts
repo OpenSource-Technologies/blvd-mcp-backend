@@ -193,7 +193,13 @@ const ADD_SERVICE_TO_CART = `
         id
          selectedItems {
           id
-        }
+          addons {
+            id
+            name
+            listPrice
+            description
+
+}}
       }
     }
   }
@@ -461,6 +467,47 @@ server.tool("addServiceToCart", "Add a service to an existing cart", {
 
   return { content: [{ type: "text", text: JSON.stringify(data) }] };
 });
+
+
+server.tool(
+  "removeItemInCart",
+  "Remove an item from an existing cart",
+  {
+    cartId: z.string().describe("existing cart id"),
+    itemId: z.string().describe("item id to remove")
+  },
+  async ({ cartId, itemId }) => {
+    
+    const REMOVE_ITEM_FROM_CART = `
+      mutation removeCartSelectedItem($input: RemoveCartSelectedItemInput!) {
+        removeCartSelectedItem(input: $input) {
+          cart {
+            id
+        }
+      }
+      }
+    `;
+
+    const data = await gql(REMOVE_ITEM_FROM_CART, 'CLIENT', {
+      input: {
+        id: cartId,
+        itemId: itemId
+      }
+    });
+
+    console.error(`🗑️ removed item return data: ${JSON.stringify(data)}`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(data)
+        }
+      ]
+    };
+  }
+);
+
 
 
 

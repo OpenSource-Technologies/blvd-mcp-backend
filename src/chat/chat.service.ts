@@ -489,7 +489,41 @@ export class ChatService implements OnModuleInit {
           status: 'Cart Created' 
         };
           
-      case 'addServiceToCart':
+        case "addServiceToCart": {
+          console.log("raw result",rawResult);
+          
+          const cart = rawResult.addCartSelectedBookableItem?.cart;
+          console.log("cart",cart);
+          
+          const selectedItems = cart?.selectedItems || [];
+        
+          console.log("selectedItems",selectedItems);
+          
+                    // Extract addons from each selected item
+            const addons = selectedItems.flatMap((item: any) => {
+              console.log("singleitem", item);
+
+              // If item.addons exists, map it → else return empty array
+              return item.addons?.map((addon: any) => ({
+                id: addon.id,
+                name: addon.name,
+                description: addon.description,
+                price: addon.listPrice,
+                // disabled: addon.disabled,
+              })) || [];
+            });
+
+
+          console.log("addons >> ",addons);
+        
+          return {
+            status: "Success",
+            cartId: cart?.id,
+            message: "Service added to cart.",
+            addons, // <-- CRITICAL
+          };
+        }
+        
       case 'reserveCartBookableItems':
       case 'updateCartSelectedBookableItem':
         // These return the cart structure
@@ -788,6 +822,9 @@ if (toolCall.function?.arguments) {
         // 🔧 NORMAL TOOLS
         // --------------------------------------------------------
         const output = await this.executeMCPToolAndBuildPayload(toolCall, sessionId);
+
+        console.log("final outputs >> ",output);
+        
         toolOutputs.push(output);
       }
   
