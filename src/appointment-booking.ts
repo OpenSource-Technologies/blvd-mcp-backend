@@ -185,24 +185,32 @@ const AVAILABLE_SERVICES = `query serviceList($id:ID!){
     }
 }`;
 
-
 const ADD_SERVICE_TO_CART = `
   mutation addCartSelectedBookableItem($input: AddCartSelectedBookableItemInput!) {
     addCartSelectedBookableItem(input: $input) {
       cart {
         id
-         selectedItems {
+        selectedItems {
           id
           addons {
             id
             name
             listPrice
             description
-
-}}
+          }
+          item {
+            name
+            ... on CartAvailableBookableItem {
+              optionGroups {
+                name
+              }
+            }
+          }
+        }
       }
     }
   }
+
 `;
 
 

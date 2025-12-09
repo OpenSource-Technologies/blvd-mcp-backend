@@ -16,7 +16,11 @@ interface SessionState {
   totalAmount?: number;
   awaitingClientDetails?: boolean;
   messageCount?: number; // Track message count for thread cleanup
-  sessionToken?: any
+  sessionToken?: any;
+  addonServices?: {
+    id: string;
+    name: string;
+  }[];
 }
 
 @Injectable()
@@ -28,6 +32,7 @@ export class ChatService implements OnModuleInit {
   private assistantId: string | null = null;
   private sessionState: Record<string, SessionState> = {};
   private creatingThread: Record<string, Promise<string>> = {};
+  private lastUserMessage: string = "";
 
   // ⚙️ Configuration
   private readonly MAX_MESSAGES_PER_THREAD = 15; // Reset thread after 20 messages
@@ -272,6 +277,8 @@ export class ChatService implements OnModuleInit {
         }
       };
     }
+
+    this.lastUserMessage = userMessage;
   
     // ---------------------------------------------------------
     // 🔥 Tool calls handling (may return final formatted reply)
@@ -372,7 +379,7 @@ export class ChatService implements OnModuleInit {
   }
   
   // ✅ Minimized tool outputs to reduce token usage
-  private getMinimalToolOutput(toolName: string, rawResult: any): object | string {
+  private getMinimalToolOutput(toolName: string, rawResult: any, sessionId: string): object | string {
     if (!rawResult || typeof rawResult !== 'object') {
       return rawResult; 
     }
@@ -491,39 +498,81 @@ export class ChatService implements OnModuleInit {
         };
           
         case "addServiceToCart": {
-          console.log("raw result",rawResult);
-          
           const cart = rawResult.addCartSelectedBookableItem?.cart;
-          console.log("cart",cart);
-          
           const selectedItems = cart?.selectedItems || [];
         
-          console.log("selectedItems",selectedItems);
+          const addonServices: { id: string; name: string }[] = [];
           
-                    // Extract addons from each selected item
-            const addons = selectedItems.flatMap((item: any) => {
-              console.log("singleitem", item);
+          selectedItems.forEach((item: any) => {
+            // ========== CASE 1: Addon inside "item" ==========
+            const optionGroups = item.item?.optionGroups || [];
+        
+            if (optionGroups.length > 0 && optionGroups[0].name?.toLowerCase() === "addon") {
+              
+              
+              addonServices.push({
+                id: item.id,               // service ID
+                name: item?.item?.name || item?.name // addon name
+              });
+            
+            
+              console.log("item.addons0 :", item);
+              console.log("item.addons1 :", item?.name);
+              console.log("item.addons2 :", item?.item?.name);
+              console.log("item.addons3 :", item);
+              console.log("item.addons4 :", item.id);
+              console.log("item.addonServices :", addonServices);
+              
+            }
+        
+            // // ========== CASE 2: Addon inside addons[] array ==========
+            // if (item.addons?.length > 0) {
 
-              // If item.addons exists, map it → else return empty array
-              return item.addons?.map((addon: any) => ({
-                id: addon.id,
-                name: addon.name,
-                description: addon.description,
-                price: addon.listPrice,
-                // disabled: addon.disabled,
-              })) || [];
-            });
+              
 
+            //   item.addons.forEach((addon: any) => {
+            //     addonServices.push({
+            //       id: addon.id,
+            //       name: addon.name
+            //     });
+              
+            //     console.log("item.addons 2:", addon);
+              
+            //   });
 
-          console.log("addons >> ",addons);
+              
+            // }
+          });
+        
+          // ---- Save to SessionState ----
+          if (this.sessionState[sessionId]) {
+           console.log("ennn");
+           
+            this.sessionState[sessionId].addonServices = addonServices;
+            console.log("sessionState addonServices :", this.sessionState[sessionId]?.addonServices);
+          }
+          console.log("addonServices :", addonServices);
+          console.log("sessionState addonServices :", this.sessionState[sessionId]?.addonServices);
+         
+          // extract addons (your existing logic)
+          const addons = selectedItems.flatMap((item: any) =>
+            item.addons?.map((addon: any) => ({
+              id: addon.id,
+              name: addon.name,
+              description: addon.description,
+              price: addon.listPrice,
+            })) || []
+          );
         
           return {
             status: "Success",
             cartId: cart?.id,
             message: "Service added to cart.",
-            addons, // <-- CRITICAL
+            addons
           };
         }
+
+   
         
       case 'reserveCartBookableItems':
       case 'updateCartSelectedBookableItem':
@@ -658,7 +707,7 @@ export class ChatService implements OnModuleInit {
       }
       
       // ✅ CRITICAL FIX: Use minimized output for LLM
-      const minimalResult = this.getMinimalToolOutput(toolName, parsedResult);
+      const minimalResult = this.getMinimalToolOutput(toolName, parsedResult, sessionId);
       const outputString = JSON.stringify(minimalResult);
       
       console.log(`🛠️  ${toolName} output size: ${outputString.length} chars (minimized)`);
@@ -726,6 +775,23 @@ if (toolCall.function?.arguments) {
       }
     }
 
+
+    if (toolName === 'removeItemInCart') {
+      console.log("🔍 removeItemInCart triggered");
+    
+      
+      const match = this.findMatchingAddon(this.lastUserMessage, sessionId);
+    
+      if (match) {
+        console.log("✔ Matched addon:", match);
+    
+        args.itemId = match.id; // FORCE correct addon id from session
+        args.id = this.sessionState[sessionId].cartId; // universal fix
+      } else {
+        console.log("❌ No addon matched in sessionState.addonServices");
+      }
+    }
+    
 
 
     if(toolName === 'resolveDateRange'){
@@ -861,6 +927,57 @@ if (toolCall.function?.arguments) {
     console.log(`🏁 Tool loop complete: ${currentRun.status}`);
     return currentRun;
   }
+
+
+  private findMatchingAddon(userMessage: string, sessionId: string) {
+
+    
+    const state = this.sessionState[sessionId];
+
+    
+
+    if (!state || !state.addonServices) return null;
+  
+    
+    const msg = userMessage.toLowerCase();
+  
+    // Best match based on partial text search
+    let bestMatch :any= null;
+    let highestScore = 0;
+  
+    for (const addon of state.addonServices) {
+      if (!addon?.name) continue;
+  
+      const name = addon.name.toLowerCase();
+  
+
+    
+
+      // Simple partial match
+      if (msg.includes(name)) {
+     
+        return addon; // strong match
+      }
+  
+      // Fuzzy scoring (optional)
+      let score = 0;
+      const words = name.split(" ");
+  
+      words.forEach(w => {
+        if (msg.includes(w)) score++;
+      });
+  
+      if (score > highestScore) {
+        highestScore = score;
+        bestMatch = addon;
+      }
+    }
+  
+    
+    // Return fuzzy match only if it was at least 1 hit
+    return highestScore > 0 ? bestMatch : null;
+  }
+  
   
   private extractStateFromToolOutput(toolOutput: any, sessionId :string) {
     // console.log("🟦 extractStateFromToolOutput() CALLED ------------------------");
@@ -870,8 +987,7 @@ if (toolCall.function?.arguments) {
   if (Array.isArray(toolOutput?.content) && toolOutput.content[0]?.text) {
     try {
       const parsed = JSON.parse(toolOutput.content[0].text);
-      console.log("🟢 Parsed inner JSON:", parsed);
-      toolOutput = parsed; // Replace wrapper with actual object
+     toolOutput = parsed; // Replace wrapper with actual object
     } catch (err) {
       console.log("❌ Failed to parse content[0].text:", err);
     }
@@ -906,19 +1022,15 @@ if (toolCall.function?.arguments) {
     // ----------------------- CART ID -----------------------
     // console.log("🔍 Checking for cartId sources...");
   
-    console.log("toolOutput 222 >> ",toolOutput);
     if (typeof toolOutput.createCart?.cart?.id === 'string') {
-      console.log("🟢 cartId from createCart:", toolOutput.createCart.cart.id);
       setIf('cartId', toolOutput.createCart.cart.id);
     }
 
     if (typeof toolOutput.listPrice === 'number') {
-      console.log("🟢 cartId from createCart:", toolOutput.listPrice);
       setIf('totalAmount', toolOutput.listPrice/100);
     }
   
     if (typeof toolOutput.updateCart?.cart?.id === 'string') {
-      console.log("🟢 cartId from updateCart:", toolOutput.updateCart.cart.id);
       setIf('cartId', toolOutput.updateCart.cart.id);
     
       if(toolOutput.updateCart.cart.summary){
@@ -927,18 +1039,15 @@ if (toolCall.function?.arguments) {
     }
   
     if (typeof toolOutput.cartId === 'string') {
-      console.log("🟢 cartId from direct.cartId:", toolOutput.cartId);
       setIf('cartId', toolOutput.cartId);
     }
   
     // ----------------------- PROMOTION -----------------------
     if (Array.isArray(toolOutput.offers) && toolOutput.offers[0]?.id) {
-      console.log("🟢 promotionOfferId from offers:", toolOutput.offers[0].id);
       setIf('promotionOfferId', toolOutput.offers[0].id);
     }
   
     if (toolOutput.addCartOffer?.offer?.id) {
-      console.log("🟢 promotionOfferId from addCartOffer:", toolOutput.addCartOffer.offer.id);
       setIf('promotionOfferId', toolOutput.addCartOffer.offer.id);
     }
   
@@ -951,7 +1060,6 @@ if (toolCall.function?.arguments) {
   
       if (Array.isArray(selectedItems) && selectedItems.length > 0) {
         const top = selectedItems[0];
-        console.log("🟢 selectedItems found:", top);
   
         if (typeof top.id === 'string') setIf('serviceItemId', top.id);
         if (typeof top.staffVariantId === 'string') setIf('staffVariantId', top.staffVariantId);
@@ -963,22 +1071,14 @@ if (toolCall.function?.arguments) {
     }
 
 
-
-
-
     // ----------------------- HANDLE addCartSelectedBookableItem -----------------------
 if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
   
-  console.log("i enetred");
   
   const sel = toolOutput.addCartSelectedBookableItem.cart.selectedItems;
-  console.log("(addCartSelectedBookableItem):", sel);
-
+  
 
   
-  console.log("SERVICE ITEM STORED =", this.sessionState[sessionId].serviceItemId);
-
-
   if (Array.isArray(sel) && sel.length > 0) {
     const top = sel[0];
 
@@ -988,9 +1088,6 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
 }
 
   
-
-      
-
   
     // ----------------------- BOOKABLE TIME -----------------------
     try {
@@ -1000,7 +1097,6 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
         toolOutput.selected_bookable_item;
   
       if (bookable?.id) {
-        console.log("🟢 bookableTimeId:", bookable.id);
         setIf('bookableTimeId', bookable.id);
       } else {
         console.log("⚪ No selectedBookableItem found");
@@ -1017,8 +1113,7 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
         toolOutput.client?.email;
   
       if (email) {
-        console.log("🟢 clientEmail:", email);
-        setIf('clientEmail', email);
+       setIf('clientEmail', email);
       }
   
       const total =
@@ -1027,7 +1122,6 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
         toolOutput.cart?.total;
   
       if (typeof total === 'number') {
-        console.log("🟢 totalAmount (converted):", total / 100);
         setIf('totalAmount', total / 100);
       }
     } catch (err) {
@@ -1036,28 +1130,23 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
   
     // ----------------------- PRESERVE THREAD + COUNT -----------------------
     if (preservedThreadId) {
-      console.log("🔒 Preserving original threadId:", preservedThreadId);
       s.threadId = preservedThreadId;
     }
   
     if (preservedMessageCount !== undefined) {
-      console.log("🔒 Preserving original messageCount:", preservedMessageCount);
       s.messageCount = preservedMessageCount;
     }
   
-    console.log("🟢 Updated session state:", JSON.stringify(s, null, 2));
     if(s.cartId){
       setIf('cartId', s.cartId);
     }
       
 
-    console.log("🟩 extractStateFromToolOutput() END ------------------------");
   }
   
   public async setPaymentToken(token: string, sessionId :string) {
     const s = this.sessionState[sessionId];
     
-    console.log("sssss",s);
     
     if (!s?.cartId) throw new Error('Cart not available');
     
@@ -1073,7 +1162,6 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
       arguments: { cartId: s.cartId } 
     });
 
-    console.log("att",checkoutResult.content[0].text);
     // console.log("tes",JSON.parse(checkoutResult.content[0].text?.checkoutCart?.summary));
 
 
@@ -1101,8 +1189,6 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
       throw new Error("MEMBERSHIP_ASSISTANT_ID missing");
   
 
-    console.log("✅ Assistants ready");
-    
     console.log('🔍 OpenAI SDK initialized:', {
       hasBeta: !!this.openai?.beta,
       threadsRuns: !!this.openai?.beta?.threads?.runs,
