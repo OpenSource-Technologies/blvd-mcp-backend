@@ -507,21 +507,13 @@ export class ChatService implements OnModuleInit {
             // ========== CASE 1: Addon inside "item" ==========
             const optionGroups = item.item?.optionGroups || [];
         
-            if (optionGroups.length > 0 && optionGroups[0].name?.toLowerCase() === "addon") {
-              
+            //if (optionGroups.length > 0 && optionGroups[0].name?.toLowerCase() === "addon") {
+              if (optionGroups.length > 0) {
               
               addonServices.push({
                 id: item.id,               // service ID
                 name: item?.item?.name || item?.name // addon name
               });
-            
-            
-              console.log("item.addons0 :", item);
-              console.log("item.addons1 :", item?.name);
-              console.log("item.addons2 :", item?.item?.name);
-              console.log("item.addons3 :", item);
-              console.log("item.addons4 :", item.id);
-              console.log("item.addonServices :", addonServices);
               
             }
         
@@ -546,14 +538,9 @@ export class ChatService implements OnModuleInit {
         
           // ---- Save to SessionState ----
           if (this.sessionState[sessionId]) {
-           console.log("ennn");
            
             this.sessionState[sessionId].addonServices = addonServices;
-            console.log("sessionState addonServices :", this.sessionState[sessionId]?.addonServices);
           }
-          console.log("addonServices :", addonServices);
-          console.log("sessionState addonServices :", this.sessionState[sessionId]?.addonServices);
-         
           // extract addons (your existing logic)
           const addons = selectedItems.flatMap((item: any) =>
             item.addons?.map((addon: any) => ({
@@ -933,6 +920,7 @@ if (toolCall.function?.arguments) {
 
     
     const state = this.sessionState[sessionId];
+    console.log("state.addonServices >> ",state.addonServices)
 
     
 
