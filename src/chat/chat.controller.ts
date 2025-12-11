@@ -6,8 +6,8 @@ export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
   @Post()
-  async chat(@Body('chatInput') message: string, @Body('sessionId') sessionId: string) {
-    const response = await this.chatService.sendMessage(message, sessionId);
+  async chat(@Body('chatInput') message: string, @Body('sessionId') sessionId: string, @Body('uuid') uuid: string) {
+    const response = await this.chatService.sendMessage(message, sessionId, uuid);
     return response; // ✅ don’t wrap it again
   }
 

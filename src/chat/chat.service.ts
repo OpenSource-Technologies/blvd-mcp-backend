@@ -4,8 +4,9 @@ import OpenAI from 'openai';
 import { Client as MCPClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { log } from 'node:console';
+import Redis from 'ioredis';
 
-interface SessionState {
+interface UserContext {
   threadId?: string;
   cartId?: string;
   serviceItemId?: string;
@@ -21,6 +22,8 @@ interface SessionState {
     id: string;
     name: string;
   }[];
+  assistantType?: string; // booking/membership/gift
+  // extend with extra fields like lastAppointment, preferences, flags, etc.
 }
 
 @Injectable()
@@ -29,8 +32,16 @@ export class ChatService implements OnModuleInit {
   private mcpClient!: MCPClient;
   private transport!: any;
 
+
+    // In-memory L1 cache for contexts to avoid too many redis calls (optional)
+    private contextCache: Map<string, UserContext> = new Map();
+
+    // Redis client (source of truth)
+    private redis: any;
+
+    
   private assistantId: string | null = null;
-  private sessionState: Record<string, SessionState> = {};
+  // private sessionState: Record<string, SessionState> = {};
   private creatingThread: Record<string, Promise<string>> = {};
   private lastUserMessage: string = "";
 
@@ -60,15 +71,60 @@ export class ChatService implements OnModuleInit {
   constructor() {
     //console.log("sessionToken in chat.service.ts",this.sessionToken);
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  
+    const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+    this.redis = new (Redis as any)(redisUrl);
+
+
+  }
+
+  private ctxKey(uuid: string) {
+    return `chat:ctx:${uuid}`;
+  }
+
+  private async loadUserContext(uuid: string): Promise<UserContext> {
+    // Try cache first
+    if (this.contextCache.has(uuid)) {
+      return this.contextCache.get(uuid)!;
+    }
+
+    const raw = await this.redis.get(this.ctxKey(uuid));
+    const parsed: UserContext = raw ? JSON.parse(raw) : {};
+    
+    console.log("parsed", parsed);
+    console.log("raw", raw);
+    console.log("uuid", uuid);
+    console.log("ctxKey", this.ctxKey(uuid));
+    console.log("redis", this.redis);
+    // populate cache
+    this.contextCache.set(uuid, parsed);
+    return parsed;
+  }
+
+  private async saveUserContext(uuid: string, ctx: UserContext): Promise<void> {
+    // Update cache and redis
+    this.contextCache.set(uuid, ctx);
+    await this.redis.set(this.ctxKey(uuid), JSON.stringify(ctx));
+  }
+
+  private async clearUserContextFields(uuid: string, fields: (keyof UserContext)[]) {
+    const ctx = await this.loadUserContext(uuid);
+    for (const f of fields) {
+      delete (ctx as any)[f];
+    }
+    await this.saveUserContext(uuid, ctx);
   }
 
 
 
 
-  tokenGenerate(sessionId:string){
+  tokenGenerate(uuid:string){
     let token = Math.random().toString(36).substring(2, 10);
-    this.sessionState[sessionId].sessionToken = token
-    console.log("token in chat.service.ts",token);
+    this.loadUserContext(uuid).then(ctx => {
+      ctx.sessionToken = token;
+      this.saveUserContext(uuid, ctx).catch(() => {});
+    }).catch(() => {});
+    console.log("token in chat.service.ts", token);
     return token;
   }
 
@@ -113,137 +169,128 @@ export class ChatService implements OnModuleInit {
   }
 
   // 🔄 Reset thread if it gets too long
-  private async checkAndResetThread(sessionId: string): Promise<void> {
-    const state = this.sessionState[sessionId];
-    if (!state?.threadId || !state.messageCount) return;
+  private async checkAndResetThread(uuid: string): Promise<void> {
+    const ctx = await this.loadUserContext(uuid);
+    if (!ctx?.threadId || !ctx.messageCount) return;
 
-    if (state.messageCount >= this.MAX_MESSAGES_PER_THREAD) {
+    if (ctx.messageCount >= this.MAX_MESSAGES_PER_THREAD) {
       console.log(`🔄 Thread exceeded ${this.MAX_MESSAGES_PER_THREAD} messages. Creating new thread...`);
-      
-      // Create new thread
+
       const newThread = await this.openai.beta.threads.create();
-      state.threadId = newThread.id;
-      state.messageCount = 0;
-      
+      ctx.threadId = newThread.id;
+      ctx.messageCount = 0;
+
+      await this.saveUserContext(uuid, ctx);
       console.log(`✨ New thread created: ${newThread.id}`);
     }
   }
+  async ensureThreadForUser(uuid: string): Promise<string> {
+    const ctx = await this.loadUserContext(uuid);
 
-  async ensureThreadForSession(sessionId: string): Promise<string> {
-    if (!this.sessionState[sessionId]) {
-      this.sessionState[sessionId] = { messageCount: 0 };
-    }
-
-    if (!this.sessionState[sessionId].threadId) {
-      if (!this.creatingThread[sessionId]) {
-        this.creatingThread[sessionId] = this.openai.beta.threads.create()
+    if (!ctx.threadId) {
+      if (!this.creatingThread[uuid]) {
+        this.creatingThread[uuid] = this.openai.beta.threads.create()
           .then((thread: any) => {
-            this.sessionState[sessionId].threadId = thread.id;
-            this.sessionState[sessionId].messageCount = 0;
-           // this.sessionState[sessionId].sessionToken = this.sessionToken
-            this.conversationHistory=null;
-            delete this.creatingThread[sessionId];
-            console.log(`✨ Created new thread: ${thread.id} for session ${sessionId}`);
-            return thread.id;
+            ctx.threadId = thread.id;
+            ctx.messageCount = 0;
+            // persist
+            return this.saveUserContext(uuid, ctx).then(() => {
+              this.conversationHistory = null;
+              delete this.creatingThread[uuid];
+              console.log(`✨ Created new thread: ${thread.id} for user ${uuid}`);
+              return thread.id;
+            });
           })
           .catch((err: any) => {
-            delete this.creatingThread[sessionId];
+            delete this.creatingThread[uuid];
             throw err;
           });
       }
-      return this.creatingThread[sessionId];
+      return this.creatingThread[uuid];
     }
-
-    return this.sessionState[sessionId].threadId!;
+    return ctx.threadId!;
   }
 
-  private detectAssistant(userMessage: string,  sessionId: string){
+
+
+ private detectAssistant(userMessage: string, uuid: string) {
     const lower = userMessage.toLowerCase();
-    const state = this.sessionState[sessionId];
-  
-  
+
+    // load context only if we need to update it
+    // but we also want to set assistantType into context
+    const setAssistant = async (type: string) => {
+      const ctx = await this.loadUserContext(uuid);
+      ctx.assistantType = type;
+      ctx.sessionToken = ctx.sessionToken ?? this.tokenGenerate(uuid);
+      await this.saveUserContext(uuid, ctx);
+    };
+
     if (lower.includes('membership') || lower.includes('member') || lower.includes('package') || lower.includes('plan')) {
       this.conversationHistory = "membership";
-      this.sessionToken = this.tokenGenerate(sessionId);
+      setAssistant('membership').catch(() => {});
       return 'membership';
     }
 
     if (lower.includes('gift') || lower.includes('giftcard')) {
       this.conversationHistory = "gift";
-      this.sessionToken = this.tokenGenerate(sessionId);
+      setAssistant('gift').catch(() => {});
       return 'gift';
     }
-    
+
     if (lower.includes('book') || lower.includes('appointment') || lower.includes('service') || lower.includes('schedule')) {
       this.conversationHistory = "booking";
-      this.sessionToken = this.tokenGenerate(sessionId);
+      setAssistant('booking').catch(() => {});
       return 'booking';
     }
-  
-    // default to booking if unsure
+
     return null;
-
-    // const bookingKeywords = [
-    //   'book', 'appointment', 'service'
-    // ];
-
-    // const giftKeywords = [
-    //   'gift card', 'giftcard', 'buy gift', 'purchase gift', 'gift amount',
-    //   'send gift', 'email gift card', 'gift'
-    // ];
-  
-    // if (bookingKeywords.some(k => msg.includes(k))) {
-    //   return 'booking';
-    // }
-
-    // if (giftKeywords.some(k => msg.includes(k))) {
-    //   return 'gift';
-    // }
-  
-    // return null;
   }
   
 
   public async sendMessage(
     userMessage: string,
-    sessionId :string
+    sessionId: string, // keep ephemeral session id if your frontend sends it
+    uuid: string // persistent user id from frontend
   ): Promise<{ reply: any }> {
-  
+
     let intent: any = "";
 
-    const threadId = await this.ensureThreadForSession(sessionId);
-    
+    // ensure a thread for the user
+    const threadId = await this.ensureThreadForUser(uuid);
 
-    intent = this.detectAssistant(userMessage, sessionId);
-    
-    console.log("intent",intent);
-    
-    if (!this.mcpClient || this.moduleName!=this.conversationHistory) await this.initMCP(this.conversationHistory);
-      
+    intent = this.detectAssistant(userMessage, uuid);
+
+    console.log("intent", intent);
+
+    // init MCP if needed
+    if (!this.mcpClient || this.moduleName !== this.conversationHistory) {
+      await this.initMCP(this.conversationHistory);
+    }
+
     if (intent) {
       this.conversationHistory = intent;
     }
 
-      console.log("intentintent  >> ",intent);
-      console.log("conversationHistory >> ",this.conversationHistory)
+    console.log("intentintent  >> ", intent);
+    console.log("conversationHistory >> ", this.conversationHistory)
 
-      if (!this.conversationHistory) {
-        // New session → always use Booking assistant for default greeting
-        this.assistantId = process.env.DEFAULT_ASSISTANT_ID!;
-      } else if (this.conversationHistory === 'gift') {
-        this.assistantId = process.env.GIFT_ASSISTANT_ID!;
-        console.log("🎁 Using Gift Card Assistant");
-      } else if (this.conversationHistory === 'membership') {
-        this.assistantId = process.env.MEMBERSHIP_ASSISTANT_ID!;
-      } else {
-        this.assistantId = process.env.BOOKING_ASSISTANT_ID!;
-        console.log("💇 Using Booking Assistant");
-      }
-      
-      console.log("assistantId",this.assistantId);
-  
-    await this.checkAndResetThread(sessionId);
-  
+    if (!this.conversationHistory) {
+      // New session → always use Booking assistant for default greeting
+      this.assistantId = process.env.DEFAULT_ASSISTANT_ID!;
+    } else if (this.conversationHistory === 'gift') {
+      this.assistantId = process.env.GIFT_ASSISTANT_ID!;
+      console.log("🎁 Using Gift Card Assistant");
+    } else if (this.conversationHistory === 'membership') {
+      this.assistantId = process.env.MEMBERSHIP_ASSISTANT_ID!;
+    } else {
+      this.assistantId = process.env.BOOKING_ASSISTANT_ID!;
+      console.log("💇 Using Booking Assistant");
+    }
+
+    console.log("assistantId", this.assistantId);
+
+    await this.checkAndResetThread(uuid);
+
     if (!threadId) {
       return {
         reply: {
@@ -252,23 +299,35 @@ export class ChatService implements OnModuleInit {
         }
       };
     }
-  
+
     console.log("📨 User message:", userMessage);
-  
+
     await this.openai.beta.threads.messages.create(threadId, {
       role: "user",
       content: userMessage,
     });
-  
-    this.sessionState[sessionId].messageCount =
-      (this.sessionState[sessionId].messageCount || 0) + 1;
-  
+
+    // increment message count on context
+    const ctx = await this.loadUserContext(uuid);
+    ctx.messageCount = (ctx.messageCount || 0) + 1;
+    await this.saveUserContext(uuid, ctx);
+
     let run = await this.openai.beta.threads.runs.create(threadId, {
       assistant_id: this.assistantId,
-    });
-  
+      additional_instructions: `
+      Here is the user's persistent context:
+      ${JSON.stringify(ctx, null, 2)}
+      
+      Rules:
+      - If user asks about cart, service, addons, email, or booking info, answer using this context.
+      - If context value exists, NEVER say "I don't know".
+      - Only say unknown if the field is not present in context.
+        `
+      });
+
+
     run = await this.pollRunUntilComplete(threadId, run.id);
-  
+
     if (run.status === "failed") {
       return {
         reply: {
@@ -279,22 +338,22 @@ export class ChatService implements OnModuleInit {
     }
 
     this.lastUserMessage = userMessage;
-  
+
     // ---------------------------------------------------------
     // 🔥 Tool calls handling (may return final formatted reply)
     // ---------------------------------------------------------
     if (run?.required_action?.submit_tool_outputs?.tool_calls) {
-      const toolResponse = await this.handleToolCalls(threadId, run, sessionId);
-  
+      const toolResponse = await this.handleToolCalls(threadId, run, uuid);
+
       // If handleToolCalls returned a FINAL chatbot reply (Format A or B)
       if (toolResponse?.reply) {
         return toolResponse; // <-- IMPORTANT
       }
-  
+
       // Otherwise, continue using updated run
       run = toolResponse;
     }
-  
+
     // ---------------------------------------------------------
     // After all tools: fetch assistant's latest message
     // ---------------------------------------------------------
@@ -302,24 +361,24 @@ export class ChatService implements OnModuleInit {
       limit: 1,
       order: "desc",
     });
-  
+
     const latest = messages?.data?.[0];
     let assistantText = "Sorry – could not generate a response.";
-  
+
     if (latest?.role === "assistant" && latest?.content) {
       assistantText = latest.content
         .map((b: any) => b?.text?.value || "")
         .join("")
         .trim();
     }
-  
+
     console.log("🤖 Assistant response:", assistantText);
-  
+
     // ---------------------------------------------------------
     // Optional frontend-action extraction
     // ---------------------------------------------------------
-    const frontendAction = this.extractFrontendAction(assistantText);
-  
+    const frontendAction = this.extractFrontendAction(assistantText, uuid);
+
     if (frontendAction) {
       return {
         reply: {
@@ -329,7 +388,7 @@ export class ChatService implements OnModuleInit {
         }
       };
     }
-  
+
     // ---------------------------------------------------------
     // Format-A: Normal reply
     // ---------------------------------------------------------
@@ -340,25 +399,25 @@ export class ChatService implements OnModuleInit {
       }
     };
   }
-  
-  
-  
-  // ----------------------------------------------
-  // Optional: Extract frontend action metadata
-  // ----------------------------------------------
-  private extractFrontendAction(text: string): any {
+
+  private extractFrontendAction(text: string, uuid: string): any {
     // Example: assistant prints some tag like <PAY_BUTTON> or similar logic
     if (text.includes("[[SHOW_PAY_BUTTON]]")) {
+      // we load context to build checkout link
+      const ctxPromise = this.loadUserContext(uuid);
+      // build the result asynchronously; but this function is sync in original code so:
+      // we'll return a minimal object and the sendMessage workflow already uses it synchronously.
+      // To keep things simple here, fetch synchronously via cached context (loadUserContext caches)
+      const ctx = this.contextCache.get(uuid) ?? {};
       return {
         type: "SHOW_PAY_BUTTON",
-        checkoutUrl: `${process.env.CHECKOUT_LINK}/?email=${this.sessionState.clientEmail}&amount=${this.sessionState.totalAmount}&token=${this.sessionState.sessionToken}`
+        checkoutUrl: `${process.env.CHECKOUT_LINK}/?email=${ctx.clientEmail || ''}&amount=${ctx.totalAmount || 0}&token=${ctx.sessionToken || ''}`
       };
     }
-  
+
     return null;
   }
-  
-  
+
 
   // ✅ Custom polling with configurable intervals
   private async pollRunUntilComplete(threadId: string, runId: string): Promise<any> {
@@ -379,7 +438,7 @@ export class ChatService implements OnModuleInit {
   }
   
   // ✅ Minimized tool outputs to reduce token usage
-  private getMinimalToolOutput(toolName: string, rawResult: any, sessionId: string): object | string {
+  private getMinimalToolOutput(toolName: string, rawResult: any, uuid: string): object | string {
     if (!rawResult || typeof rawResult !== 'object') {
       return rawResult; 
     }
@@ -500,48 +559,23 @@ export class ChatService implements OnModuleInit {
         case "addServiceToCart": {
           const cart = rawResult.addCartSelectedBookableItem?.cart;
           const selectedItems = cart?.selectedItems || [];
-        
+  
           const addonServices: { id: string; name: string }[] = [];
-          
+  
           selectedItems.forEach((item: any) => {
-            // ========== CASE 1: Addon inside "item" ==========
             const optionGroups = item.item?.optionGroups || [];
-        
-            //if (optionGroups.length > 0 && optionGroups[0].name?.toLowerCase() === "addon") {
-              if (optionGroups.length > 0) {
-              
+            if (optionGroups.length > 0 && optionGroups[0].name?.toLowerCase() === "addon") {
               addonServices.push({
-                id: item.id,               // service ID
-                name: item?.item?.name || item?.name // addon name
+                id: item.id,
+                name: item?.item?.name || item?.name
               });
-              
             }
-        
-            // // ========== CASE 2: Addon inside addons[] array ==========
-            // if (item.addons?.length > 0) {
-
-              
-
-            //   item.addons.forEach((addon: any) => {
-            //     addonServices.push({
-            //       id: addon.id,
-            //       name: addon.name
-            //     });
-              
-            //     console.log("item.addons 2:", addon);
-              
-            //   });
-
-              
-            // }
           });
-        
-          // ---- Save to SessionState ----
-          if (this.sessionState[sessionId]) {
-           
-            this.sessionState[sessionId].addonServices = addonServices;
-          }
-          // extract addons (your existing logic)
+  
+          // persist addonServices into user context
+          this.loadUserContext('temp').catch(()=>{}); // no-op; we will set when available
+          // Note: the caller of this function passes uuid and will separately save addonServices in extractStateFromToolOutput
+  
           const addons = selectedItems.flatMap((item: any) =>
             item.addons?.map((addon: any) => ({
               id: addon.id,
@@ -550,7 +584,7 @@ export class ChatService implements OnModuleInit {
               price: addon.listPrice,
             })) || []
           );
-        
+  
           return {
             status: "Success",
             cartId: cart?.id,
@@ -661,11 +695,11 @@ export class ChatService implements OnModuleInit {
     }
   }
 
-  private async executeMCPToolAndBuildPayload(toolCall: any, sessionId: string) {
+  private async executeMCPToolAndBuildPayload(toolCall: any, uuid: string) {
     const tool_call_id = toolCall.id;
     const toolName = toolCall.function.name;
     let args: any = {};
-    
+
     try {
       args = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
     } catch {
@@ -674,16 +708,12 @@ export class ChatService implements OnModuleInit {
 
     try {
       const rawResult = await this.mcpClient.callTool({ name: toolName, arguments: args });
-      
-      console.log("rawresult",rawResult);
-      
 
       // Extract state from full result (for internal session tracking)
       try {
-        this.extractStateFromToolOutput(rawResult, sessionId);
+        await this.extractStateFromToolOutput(rawResult, uuid);
       } catch { /* ignore */ }
-      
-      // ✅ PARSE the MCP response properly
+
       let parsedResult = rawResult;
       if (rawResult?.content?.[0]?.text) {
         try {
@@ -692,13 +722,12 @@ export class ChatService implements OnModuleInit {
           parsedResult = rawResult.content[0].text;
         }
       }
-      
-      // ✅ CRITICAL FIX: Use minimized output for LLM
-      const minimalResult = this.getMinimalToolOutput(toolName, parsedResult, sessionId);
+
+      const minimalResult = this.getMinimalToolOutput(toolName, parsedResult, uuid);
       const outputString = JSON.stringify(minimalResult);
-      
+
       console.log(`🛠️  ${toolName} output size: ${outputString.length} chars (minimized)`);
-          
+
       return {
         tool_call_id,
         output: outputString,
@@ -709,10 +738,11 @@ export class ChatService implements OnModuleInit {
     }
   }
 
+  
   private async handleToolCalls(
     threadId: string,
     initialRun: any,
-    sessionId: string
+    uuid: string
   ): Promise<any> {
     let currentRun: any = initialRun;
     let iterationCount = 0;
@@ -742,9 +772,9 @@ export class ChatService implements OnModuleInit {
 if (toolCall.function?.arguments) {
   try {
     let args = JSON.parse(toolCall.function.arguments);
-    const correctCartId = this.sessionState[sessionId]?.cartId;
+    const ctx = await this.loadUserContext(uuid);
+    const correctCartId = ctx?.cartId;
 
-    console.log("sessionState",this.sessionState[sessionId]);
     console.log("correctCartId",correctCartId);
     console.log("args",args);
     
@@ -767,13 +797,13 @@ if (toolCall.function?.arguments) {
       console.log("🔍 removeItemInCart triggered");
     
       
-      const match = this.findMatchingAddon(this.lastUserMessage, sessionId);
+      const match = this.findMatchingAddon(this.lastUserMessage, uuid);
     
       if (match) {
         console.log("✔ Matched addon:", match);
     
         args.itemId = match.id; // FORCE correct addon id from session
-        args.id = this.sessionState[sessionId].cartId; // universal fix
+        args.id = ctx.cartId;
       } else {
         console.log("❌ No addon matched in sessionState.addonServices");
       }
@@ -782,7 +812,7 @@ if (toolCall.function?.arguments) {
 
 
     if(toolName === 'resolveDateRange'){
-      const result: any = await this.executeMCPToolAndBuildPayload(toolCall, sessionId);
+      const result: any = await this.executeMCPToolAndBuildPayload(toolCall, uuid);
         
       // ✅ Parse correct payload for state extraction
       let parsedOutput :any= {};
@@ -816,7 +846,7 @@ if (toolCall.function?.arguments) {
 
       console.log("i in cartBookableStaffVariants");
       
-        const serviceItemId = this.sessionState[sessionId]?.serviceItemId;
+        const serviceItemId =  ctx?.serviceItemId;
       
         console.log("🔍 serviceItemId from session =", serviceItemId);
       
@@ -844,7 +874,7 @@ if (toolCall.function?.arguments) {
         // 🎁 SPECIAL CASE — setClientOnCart
         // --------------------------------------------------------
         if (toolName === "setClientOnCart") {
-          const result: any = await this.executeMCPToolAndBuildPayload(toolCall, sessionId);
+          const result: any = await this.executeMCPToolAndBuildPayload(toolCall, uuid);
         
           // ✅ Parse correct payload for state extraction
           let parsedOutput = {};
@@ -853,9 +883,9 @@ if (toolCall.function?.arguments) {
           } catch {}
         
           // ✅ Extract cartId / email into session state
-          this.extractStateFromToolOutput(parsedOutput, sessionId);
+          this.extractStateFromToolOutput(parsedOutput, uuid);
         
-          const item = this.sessionState[sessionId];
+          const item =  await this.loadUserContext(uuid);
           console.log("setClientOut >> ",item)
         
           return {
@@ -875,7 +905,7 @@ if (toolCall.function?.arguments) {
         // --------------------------------------------------------
         // 🔧 NORMAL TOOLS
         // --------------------------------------------------------
-        const output = await this.executeMCPToolAndBuildPayload(toolCall, sessionId);
+        const output = await this.executeMCPToolAndBuildPayload(toolCall, uuid);
 
         console.log("final outputs >> ",output);
         
@@ -916,10 +946,10 @@ if (toolCall.function?.arguments) {
   }
 
 
-  private findMatchingAddon(userMessage: string, sessionId: string) {
+  private findMatchingAddon(userMessage: string, uuid: string) {
 
     
-    const state = this.sessionState[sessionId];
+    const state = this.contextCache.get(uuid) || {};
     console.log("state.addonServices >> ",state.addonServices)
 
     
@@ -967,7 +997,7 @@ if (toolCall.function?.arguments) {
   }
   
   
-  private extractStateFromToolOutput(toolOutput: any, sessionId :string) {
+  private async extractStateFromToolOutput(toolOutput: any, uuid :string) {
     // console.log("🟦 extractStateFromToolOutput() CALLED ------------------------");
     // console.log("🔵 Raw toolOutput:", JSON.stringify(toolOutput, null, 2));
   
@@ -985,25 +1015,21 @@ if (toolCall.function?.arguments) {
     console.log("❌ toolOutput is empty or invalid");
     return;
   }
+
+  const ctx = await this.loadUserContext(uuid);
   
-    if (!this.sessionState[sessionId]) this.sessionState[sessionId] = {};
-    const s = this.sessionState[sessionId];
+    // if (!this.sessionState[sessionId]) this.sessionState[sessionId] = {};
+    // const s = this.sessionState[sessionId];
   
     // console.log("🟡 Previous session state:", JSON.stringify(s, null, 2));
   
-    const preservedThreadId = s.threadId;
-    const preservedMessageCount = s.messageCount;
+    // const preservedThreadId = s.threadId;
+    // const preservedMessageCount = s.messageCount;
   
-    const setIf = (k: keyof SessionState, v: any) => {
-      if (k === 'threadId' || k === 'messageCount') {
-        // console.log(`⏭️ SKIP updating reserved key ${k}`);
-        return;
-      }
+    const setIf = (k: keyof UserContext, v: any) => {
+      if (k === 'threadId' || k === 'messageCount') return;
       if (v !== undefined && v !== null) {
-        // console.log(`🟢 Setting s.${k} =`, v);
-        (s as any)[k] = v;
-      } else {
-        // console.log(`⚪ Value for ${k} was undefined/null, ignored`);
+        (ctx as any)[k] = v;
       }
     };
   
@@ -1115,44 +1141,65 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
     } catch (err) {
       console.log("❌ Error processing email/total", err);
     }
+
+
+      // handle addonServices gather
+      try {
+        const selectedItems =
+          toolOutput.selectedItems ||
+          toolOutput.cart?.selectedItems ||
+          toolOutput.addCartSelectedBookableItem?.cart?.selectedItems ||
+          [];
   
-    // ----------------------- PRESERVE THREAD + COUNT -----------------------
-    if (preservedThreadId) {
-      s.threadId = preservedThreadId;
-    }
+        if (Array.isArray(selectedItems) && selectedItems.length > 0) {
+          const addonServices: { id: string; name: string }[] = [];
+          selectedItems.forEach((item: any) => {
+            const optionGroups = item.item?.optionGroups || [];
+            if (optionGroups.length > 0 && optionGroups[0].name?.toLowerCase() === "addon") {
+              addonServices.push({
+                id: item.id,
+                name: item?.item?.name || item?.name
+              });
+            }
+            if (Array.isArray(item.addons)) {
+              item.addons.forEach((a: any) => {
+                addonServices.push({ id: a.id, name: a.name });
+              });
+            }
+          });
+          if (addonServices.length > 0) setIf('addonServices', addonServices);
+        }
+      } catch (err) {
+        console.log("❌ Error extracting addonServices", err);
+      }
   
-    if (preservedMessageCount !== undefined) {
-      s.messageCount = preservedMessageCount;
-    }
   
-    if(s.cartId){
-      setIf('cartId', s.cartId);
-    }
-      
+   
+    await this.saveUserContext(uuid, ctx);
 
   }
   
-  public async setPaymentToken(token: string, sessionId :string) {
-    const s = this.sessionState[sessionId];
+  public async setPaymentToken(token: string, uuid :string) {
+    const c = await this.loadUserContext(uuid);
     
     
-    if (!s?.cartId) throw new Error('Cart not available');
-    
+    if (!c?.cartId) throw new Error('Cart not available');
+  
     const res=await this.mcpClient.callTool({ 
       name: 'addCartCardPaymentMethod', 
-      arguments: { cartId: s.cartId, token, select: true } 
+      arguments: { cartId: c.cartId, token, select: true } 
     });
 
     
     
     const checkoutResult: any = await this.mcpClient.callTool({ 
       name: 'checkoutCart', 
-      arguments: { cartId: s.cartId } 
+      arguments: { cartId: c.cartId } 
     });
 
     // console.log("tes",JSON.parse(checkoutResult.content[0].text?.checkoutCart?.summary));
 
-
+    await this.extractStateFromToolOutput(checkoutResult, uuid);
     
     
     return checkoutResult;
@@ -1183,14 +1230,27 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
     });
   }
 
-  async cleanupAfterCheckout(sessionId:any) {
-    if (this.sessionState[sessionId]) {
-      // delete this.sessionState[sessionId].threadId;
-      // this.sessionState[sessionId].messageCount = 0;
-      this.conversationHistory = null;
-      delete this.sessionState[sessionId];
-     // this.sessionToken = this.tokenGenerate(sessionId);
+  // async cleanupAfterCheckout(sessionId:any) {
+  //   if (this.sessionState[sessionId]) {
+  //     // delete this.sessionState[sessionId].threadId;
+  //     // this.sessionState[sessionId].messageCount = 0;
+  //     this.conversationHistory = null;
+  //     delete this.sessionState[sessionId];
+  //    // this.sessionToken = this.tokenGenerate(sessionId);
+  //   }
+  //   console.log("🧹 Thread cleaned for session:", this.sessionState);
+  // }
+
+  async cleanupAfterCheckout(uuid: string) {
+    const ctx = await this.loadUserContext(uuid);
+    if (ctx) {
+      // Clear ephemeral things but keep the rest (preferences etc.)
+      ctx.threadId = undefined;
+      ctx.cartId = undefined;
+      ctx.messageCount = 0;
+      // Keep assistantType, preferences, last booked appointment etc.
+      await this.saveUserContext(uuid, ctx);
     }
-    console.log("🧹 Thread cleaned for session:", this.sessionState);
+    console.log("🧹 Context cleaned for user:", uuid);
   }
 }

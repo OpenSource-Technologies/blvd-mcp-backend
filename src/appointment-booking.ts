@@ -491,7 +491,18 @@ server.tool(
         removeCartSelectedItem(input: $input) {
           cart {
             id
-        }
+            selectedItems {
+                id
+                 item {
+                    name
+                }
+            }
+                 summary {
+                     subtotal
+                    taxAmount
+                    total
+
+  }}
       }
       }
     `;
