@@ -12,7 +12,7 @@ export class ChatController {
   }
 
   @Post('receive-token')
-  async receiveToken(@Body('token') token: string, @Body('sessionId') sessionId: string) {
+  async receiveToken(@Body('token') token: string, @Body('sessionId') sessionId: string,  @Body('uuid') uuid: string) {
     if (!token) {
       return {
         reply: {
@@ -22,7 +22,7 @@ export class ChatController {
       };
     }
   
-    const checkoutResult = await this.chatService.setPaymentToken(token, sessionId);
+    const checkoutResult = await this.chatService.setPaymentToken(token, sessionId, uuid);
   
     if (!checkoutResult) {
       return {

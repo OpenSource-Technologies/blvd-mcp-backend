@@ -6,25 +6,26 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { log } from 'node:console';
 import Redis from 'ioredis';
 
-interface UserContext {
-  threadId?: string;
+
+interface UserContext { 
+  threadId?: string; 
   cartId?: string;
   serviceItemId?: string;
-  bookableTimeId?: string;
+  bookableTimeId?: string; 
   staffVariantId?: string;
-  promotionOfferId?: string;
-  clientEmail?: string;
-  totalAmount?: number;
-  awaitingClientDetails?: boolean;
-  messageCount?: number; // Track message count for thread cleanup
-  sessionToken?: any;
-  addonServices?: {
-    id: string;
-    name: string;
-  }[];
-  assistantType?: string; // booking/membership/gift
-  // extend with extra fields like lastAppointment, preferences, flags, etc.
-}
+  promotionOfferId?: string; 
+  clientEmail?: string; 
+  totalAmount?: number; 
+  awaitingClientDetails?: boolean; 
+  messageCount?: number; 
+  sessionToken?: any; 
+  assistantType?: "booking" | "giftcard" | "membership"; 
+  clientInfo?: { email?: string; phone?: string; name?: string; }; 
+  appointmentHistory?: { appointmentId: string; createdAt: string; serviceName?: string; }[]; 
+  
+  booking?: { cartId?: string; serviceItemId?: string; bookableTimeId?: string; staffVariantId?: string; promotionOfferId?: string; addonServices?: { id: string; name: string }[]; clientInfo?: { email?: string; phone?: string; name?: string; }; checkoutAppointments?: string[]; };
+  membership?: { membershipPlanId?: string; membershipCartId?: string; clientInfo?: { email?: string; phone?: string; name?: string; }; }; 
+  giftcard?: { amount?: number; clientInfo?: { email?: string; phone?: string; name?: string; }; giftcardCartId?: string; recipientEmail?: string; senderMessage?: string; }; flags?: { awaitingClientDetails?: boolean; }; }
 
 @Injectable()
 export class ChatService implements OnModuleInit {
@@ -219,7 +220,7 @@ export class ChatService implements OnModuleInit {
     // load context only if we need to update it
     // but we also want to set assistantType into context
     const setAssistant = async (type: string) => {
-      const ctx = await this.loadUserContext(uuid);
+      const ctx :any= await this.loadUserContext(uuid);
       ctx.assistantType = type;
       ctx.sessionToken = ctx.sessionToken ?? this.tokenGenerate(uuid);
       await this.saveUserContext(uuid, ctx);
@@ -322,9 +323,29 @@ export class ChatService implements OnModuleInit {
       - If user asks about cart, service, addons, email, or booking info, answer using this context.
       - If context value exists, NEVER say "I don't know".
       - Only say unknown if the field is not present in context.
+      
+      CLIENT INFORMATION WORKFLOW:
+      - When you need to collect client information for booking, check the context first.
+      - If client info exists in context (email, name, phone), present it to the user like this:
+        "I have your information on file:
+        - Email: [email from context]
+        - Name: [first name] [last name from context]
+        - Phone: [phone from context]
+        
+        Would you like to use this information? (Reply 'yes' to confirm or provide new details)"
+      
+      - If user confirms with "yes", "correct", "that's right", or similar affirmative response, immediately call setClientOnCart with the stored information.
+      - If user provides new information, use the new information and call setClientOnCart.
+      - If no client info exists in context, ask the user to provide their email, name, and phone number.
+      - NEVER ask for information that's already confirmed - proceed directly to setClientOnCart.
+      
+      IMPORTANT: When calling setClientOnCart, use these exact field names:
+      - email (from context or user input)
+      - firstName (from context or user input)
+      - lastName (from context or user input)
+      - phoneNumber (from context or user input)
         `
-      });
-
+    });
 
     run = await this.pollRunUntilComplete(threadId, run.id);
 
@@ -835,7 +856,7 @@ if (toolCall.function?.arguments) {
 
     if(toolName === 'cartBookableTimes'){
       console.log("i enetred cartBookableTimes");
-      args.searchDate = this.lastResolvedRangeLower;
+      args.searchDate = this.lastResolvedDate;
       }
   
 
@@ -949,12 +970,12 @@ if (toolCall.function?.arguments) {
   private findMatchingAddon(userMessage: string, uuid: string) {
 
     
-    const state = this.contextCache.get(uuid) || {};
-    console.log("state.addonServices >> ",state.addonServices)
+    const state :any= this.contextCache.get(uuid) || {};
+    console.log("state.addonServices >> ",state.booking.addonServices)
 
     
 
-    if (!state || !state.addonServices) return null;
+    if (!state || !state.booking.addonServices) return null;
   
     
     const msg = userMessage.toLowerCase();
@@ -1118,6 +1139,15 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
     } catch (err) {
       console.log("❌ Error processing bookableTimeId", err);
     }
+
+    console.log("clientinfo",toolOutput?.updateCart?.cart?.clientInformation);
+    console.log("clientinfo2",toolOutput?.cart?.clientInformation);
+    console.log("clientinfo3",toolOutput?.client?.email);
+    
+
+    if (toolOutput?.updateCart) {
+      await this.saveClientInfo(uuid, toolOutput.updateCart?.cart?.clientInformation);
+    }
   
     // ----------------------- EMAIL + TOTAL AMOUNT -----------------------
     try {
@@ -1167,21 +1197,75 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
               });
             }
           });
-          if (addonServices.length > 0) setIf('addonServices', addonServices);
+          // Fix: setIf("addonServices", ...) expects a keyof UserContext as the first argument,
+          // so ensure 'addonServices' is a key of ctx/UserContext, or use correct key.
+          // Let's use bracket notation and type assertion to avoid TypeScript error.
+          if (addonServices.length > 0) {
+            (setIf as any)('addonServices', addonServices);
+          }
         }
       } catch (err) {
         console.log("❌ Error extracting addonServices", err);
       }
   
-  
-   
     await this.saveUserContext(uuid, ctx);
 
   }
+
+  private async saveClientInfo(
+    uuid: string,
+    info: { email?: string; phone?: string; name?: string }
+  ) {
+    const ctx = await this.loadUserContext(uuid);
   
-  public async setPaymentToken(token: string, uuid :string) {
-    const c = await this.loadUserContext(uuid);
     
+    if (!ctx.assistantType) {
+      console.log("❌ No assistantType found. Cannot save client info.");
+      return;
+    }
+  
+    switch (ctx.assistantType) {
+      case "booking":
+        ctx.booking = ctx.booking || {};
+        ctx.booking.clientInfo = {
+          ...(ctx.booking.clientInfo || {}),
+          ...info,
+        };
+        break;
+  
+      case "membership":
+        ctx.membership = ctx.membership || {};
+        ctx.membership.clientInfo = {
+          ...(ctx.membership.clientInfo || {}),
+          ...info,
+        };
+        break;
+  
+      case "giftcard":
+        ctx.giftcard = ctx.giftcard || {};
+        ctx.giftcard.clientInfo = {
+          ...(ctx.giftcard.clientInfo || {}),
+          ...info,
+        };
+        break;
+  
+      default:
+        console.log("❌ Unknown assistantType:", ctx.assistantType);
+    }
+
+    console.log("new cartinfo",ctx);
+    
+  
+    // 🔥 REMOVE OLD root-level fields (clientEmail etc.)
+    delete ctx.clientEmail;
+    delete ctx.awaitingClientDetails;
+  
+    await this.saveUserContext(uuid, ctx);
+  }
+  
+  
+  public async setPaymentToken(token: string, sessionId:string, uuid :string) {
+    const c = await this.loadUserContext(uuid);
     
     if (!c?.cartId) throw new Error('Cart not available');
   
@@ -1197,7 +1281,7 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
       arguments: { cartId: c.cartId } 
     });
 
-    // console.log("tes",JSON.parse(checkoutResult.content[0].text?.checkoutCart?.summary));
+     console.log("checkoutCart result",JSON.parse(checkoutResult.content[0].text?.checkoutCart));
 
     await this.extractStateFromToolOutput(checkoutResult, uuid);
     
