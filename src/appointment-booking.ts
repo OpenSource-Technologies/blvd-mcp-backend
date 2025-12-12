@@ -70,7 +70,35 @@ async function generate_admin_auth_header() {
     const http_basic_credentials = Buffer.from(http_basic_payload, "utf8").toString("base64");
     return http_basic_credentials;
 }
-async function gql(query, requestType, variables = {}, timeoutMs = 8000) {
+
+async function generateAuthHeader(clientId) {
+  const prefix = 'blvd-client-v1';
+  const timestamp = Math.floor(Date.now() / 1000);
+  const payload = `${prefix}${BLVD_BUSINESS_ID}${clientId}${timestamp}`;
+
+  if (!BLVD_API_SECRET)
+    throw new Error("Missing required env: BLVD_API_SECRET");
+  if (!BLVD_API_KEY)
+    throw new Error("Missing required env: BLVD_API_KEY");
+  if (!BLVD_BUSINESS_ID)
+    throw new Error("Missing required env: BLVD_BUSINESS_ID");
+  
+  let raw_key = Buffer.from(BLVD_API_SECRET, "base64");
+
+  const signature = crypto
+        .createHmac("sha256", raw_key)
+        .update(payload, "utf8")
+        .digest("base64");
+    const token = `${signature}${payload}`;
+
+    const http_basic_payload = `${BLVD_API_KEY}:${token}`;
+    const http_basic_credentials = Buffer.from(http_basic_payload, "utf8").toString("base64");
+
+    console.error("http_basic_credentials  >> ",http_basic_credentials)
+    return http_basic_credentials;
+}
+
+async function gql(query, requestType, variables, timeoutMs = 8000) {
     let API = '';
     let authenticationHeader = '';
     if (requestType == 'CLIENT') {
@@ -93,6 +121,18 @@ async function gql(query, requestType, variables = {}, timeoutMs = 8000) {
         console.log(authenticationHeader);
         
     }
+    else if (requestType === "CLIENT_AUTH") {
+      API = URL_CLIENT!;
+      console.error("CLIENT_AUTH  >> ",variables);
+      if (!variables?.clientId) {
+          throw new Error("clientId required for CLIENT_AUTH request");
+      }
+
+      // Generate the SAME header format you use in Angular
+      authenticationHeader = await generateAuthHeader(
+          variables.clientId
+      );
+  }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(API, {
@@ -400,6 +440,57 @@ const APPLY_PROMOTION_CODE = `mutation addCartOffer($input:AddCartOfferInput!){
         }
       }
     }`;
+
+   
+  const GET_MY_APPOINTMENTS = `
+    query {
+      myAppointments(first: 20) {
+        edges {
+          node {
+            id
+            startAt
+            endAt
+            cancelled
+            client {
+              id
+              email
+              firstName
+              lastName
+            }
+            location {
+              name
+              address {
+                city
+              }
+            }
+            appointmentServices {
+              startAt
+              endAt
+              price
+              serviceId
+              service {
+                name
+                id
+                description
+                category {
+                  name
+                }
+              }
+              staff {
+                firstName
+                lastName  
+                role {
+                  name
+                }
+              }
+            
+             
+            }
+          }
+        }
+      }
+    }
+    `;
 
 server.tool("getLocations", "Get available locations for the business", async () => {
   const data = await gql(GQL_LOCATIONS, 'CLIENT', { businessId: BLVD_BUSINESS_ID }, 7000);
@@ -1601,6 +1692,45 @@ server.tool("checkoutCart", "Perform final checkout for a Boulevard cart", {
         };
     }
 });
+
+
+
+
+
+server.tool(
+  "getMyAppointment", {
+    clientId: '041e6ce0-9055-4fdc-bea8-20fe41a5dfb6',
+  }, async ({ clientId }) => {
+
+    const data = await gql(GET_MY_APPOINTMENTS, "CLIENT_AUTH",{clientId:clientId});
+    console.error("myAppointments  >> ",data?.myAppointments);
+    const myAppointments = data?.myAppointments;
+
+
+    if (!myAppointments) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "myAppointments not found.",
+          },
+        ],
+      };
+    }
+
+    // ✅ Simply return the backend response as-is
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(myAppointments),
+        },
+      ],
+    };
+  }
+);
+
+
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
