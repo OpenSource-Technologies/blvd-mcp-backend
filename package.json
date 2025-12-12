@@ -28,6 +28,7 @@
     "@nestjs/platform-express": "^11.0.1",
     "chrono-node": "^2.9.0",
     "cross-fetch": "^4.1.0",
+    "ioredis": "^5.8.2",
     "openai": "^6.6.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
