@@ -87,6 +87,7 @@ export class ChatService implements OnModuleInit {
     // Try cache first
     if (this.contextCache.has(uuid)) {
       return this.contextCache.get(uuid)!;
+    }else{
     }
 
     const raw = await this.redis.get(this.ctxKey(uuid));
@@ -124,6 +125,7 @@ export class ChatService implements OnModuleInit {
     this.loadUserContext(uuid).then(ctx => {
       ctx.sessionToken = token;
       this.saveUserContext(uuid, ctx).catch(() => {});
+      return token;
     }).catch(() => {});
     console.log("token in chat.service.ts", token);
     return token;
@@ -220,9 +222,9 @@ export class ChatService implements OnModuleInit {
     // load context only if we need to update it
     // but we also want to set assistantType into context
     const setAssistant = async (type: string) => {
-      const ctx :any= await this.loadUserContext(uuid);
+      let ctx :any= await this.loadUserContext(uuid);
       ctx.assistantType = type;
-      ctx.sessionToken = ctx.sessionToken ?? this.tokenGenerate(uuid);
+      ctx.sessionToken = ctx?.sessionToken ?? this.tokenGenerate(uuid);
       await this.saveUserContext(uuid, ctx);
     };
 
@@ -673,6 +675,9 @@ export class ChatService implements OnModuleInit {
           })),
         };
 
+
+        case 'getMyAppointment':
+          console.log("getMyAppointment >> ",rawResult)
 
         /* for membership start */
       case 'getMembershipPlans':
@@ -1281,7 +1286,7 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
       arguments: { cartId: c.cartId } 
     });
 
-     console.log("checkoutCart result",JSON.parse(checkoutResult.content[0].text?.checkoutCart));
+    // console.log("checkoutCart result",JSON.parse(checkoutResult.content[0].text?.checkoutCart));
 
     await this.extractStateFromToolOutput(checkoutResult, uuid);
     
@@ -1327,11 +1332,19 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
 
   async cleanupAfterCheckout(uuid: string) {
     const ctx = await this.loadUserContext(uuid);
+    if (this.contextCache[uuid]) {
+       delete this.contextCache[uuid].threadId;
+      this.conversationHistory = null;
+      delete this.contextCache[uuid];
+      this.sessionToken = this.tokenGenerate(uuid);
+    }
+
     if (ctx) {
       // Clear ephemeral things but keep the rest (preferences etc.)
       ctx.threadId = undefined;
       ctx.cartId = undefined;
       ctx.messageCount = 0;
+      ctx.sessionToken = this.tokenGenerate(uuid);
       // Keep assistantType, preferences, last booked appointment etc.
       await this.saveUserContext(uuid, ctx);
     }
