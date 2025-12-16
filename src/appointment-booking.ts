@@ -1519,107 +1519,15 @@ mutation checkoutCart($id: ID!) {
     appointments {
       appointmentId
       clientId
-      forCartOwner
-      __typename
     }
     cart {
       id
-      expiresAt
-      clientMessage
-      startTime
-      startTimeId
-      guests {
-        id
-        firstName
-        lastName
-        email
-        label
-        number
-        phoneNumber
-        __typename
-      }
       selectedItems {
         id
-        lineTotal
         price
-        selectedPaymentMethod {
+        item {
           id
           name
-          ... on CartItemCardPaymentMethod {
-            cardBrand
-            cardExpMonth
-            cardExpYear
-            cardHolder
-            cardIsDefault
-            cardLast4
-            __typename
-          }
-          __typename
-        }
-        ... on CartBookableItem {
-          item {
-            id
-            name
-            optionGroups {
-              id
-              name
-              __typename
-            }
-            __typename
-          }
-          selectedStaffVariant {
-            duration
-            id
-            price
-            staff {
-              id
-              displayName
-              firstName
-              lastName
-              __typename
-            }
-            __typename
-          }
-          guest {
-            id
-            firstName
-            lastName
-            email
-            label
-            number
-            phoneNumber
-            __typename
-          }
-          guestId
-          selectedOptions {
-            id
-            name
-            priceDelta
-            groupId
-            durationDelta
-            description
-            __typename
-          }
-          __typename
-        }
-        __typename
-      }
-      availablePaymentMethods {
-        id
-        name
-        ... on CartItemCardPaymentMethod {
-          cardBrand
-          cardExpMonth
-          cardExpYear
-          cardHolder
-          cardIsDefault
-          cardLast4
-          __typename
-        }
-        ... on CartItemVoucherPaymentMethod {
-          availableCount
-          expiresOn
-          __typename
         }
         __typename
       }
@@ -1646,19 +1554,7 @@ mutation checkoutCart($id: ID!) {
       location {
         id
         name
-        businessName
-        contactEmail
         tz
-        address {
-          city
-          state
-          country
-          line1
-          line2
-          province
-          zip
-          __typename
-        }
         __typename
       }
       __typename
@@ -1667,6 +1563,7 @@ mutation checkoutCart($id: ID!) {
   }
 }
 `;
+
 server.tool("checkoutCart", "Perform final checkout for a Boulevard cart", {
     cartId: z.string().describe("existing cart id (e.g., urn:blvd:Cart:23f5903a-3476-478a-8096-da405bf11d53)"),
 }, async ({ cartId }) => {
@@ -1702,7 +1599,7 @@ server.tool(
     clientId: '041e6ce0-9055-4fdc-bea8-20fe41a5dfb6',
   }, async ({ clientId }) => {
 
-    const data = await gql(GET_MY_APPOINTMENTS, "CLIENT_AUTH",{clientId:clientId});
+    const data = await gql(GET_MY_APPOINTMENTS, "CLIENT_AUTH",{clientId:"041e6ce0-9055-4fdc-bea8-20fe41a5dfb6"});
     console.error("myAppointments  >> ",data?.myAppointments);
     const myAppointments = data?.myAppointments;
 

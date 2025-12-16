@@ -7,25 +7,99 @@ import { log } from 'node:console';
 import Redis from 'ioredis';
 
 
+
 interface UserContext { 
   threadId?: string; 
   cartId?: string;
+
   serviceItemId?: string;
   bookableTimeId?: string; 
   staffVariantId?: string;
   promotionOfferId?: string; 
+
   clientEmail?: string; 
   totalAmount?: number; 
   awaitingClientDetails?: boolean; 
   messageCount?: number; 
   sessionToken?: any; 
+
   assistantType?: "booking" | "giftcard" | "membership"; 
-  clientInfo?: { email?: string; phone?: string; name?: string; }; 
-  appointmentHistory?: { appointmentId: string; createdAt: string; serviceName?: string; }[]; 
-  
-  booking?: { cartId?: string; serviceItemId?: string; bookableTimeId?: string; staffVariantId?: string; promotionOfferId?: string; addonServices?: { id: string; name: string }[]; clientInfo?: { email?: string; phone?: string; name?: string; }; checkoutAppointments?: string[]; };
+
+  clientInfo?: { 
+    email?: string; 
+    phone?: string; 
+    name?: string; 
+  }; 
+
+  // 🔥 Stores ALL completed bookings
+  appointmentHistory?: CompletedBooking[];
+
+  // 🔥 Stores ONLY the current active booking being processed
+  booking?: {
+    cartId?: string;
+    serviceItemId?: string;
+    bookableTimeId?: string;
+    staffVariantId?: string;
+    promotionOfferId?: string;
+
+    addonServices?: { id: string; name: string }[];
+
+    clientInfo?: { email?: string; phone?: string; name?: string };
+
+    checkoutAppointments?: string[];
+    selectedItems?: SelectedItem[];
+    location?: Location;
+    startTime?:string;
+    summary?: Summary;
+  };
+
+
   membership?: { membershipPlanId?: string; membershipCartId?: string; clientInfo?: { email?: string; phone?: string; name?: string; }; }; 
   giftcard?: { amount?: number; clientInfo?: { email?: string; phone?: string; name?: string; }; giftcardCartId?: string; recipientEmail?: string; senderMessage?: string; }; flags?: { awaitingClientDetails?: boolean; }; }
+
+
+  type Summary = {
+    discountAmount: number;
+    subtotal: number;
+    taxAmount: number;
+    total: number;
+  };
+
+  type Location = {
+    id: string;
+    name: string;
+    tz: string;
+  };
+  
+  interface CompletedBooking {
+    cartId: string;
+  
+    // 🔥 Multiple appointment IDs possible from one checkout
+    checkoutAppointments: string[];
+  
+    // 🔥 All services included in that checkout
+    selectedItems: SelectedItem[];
+  
+    // 🔥 The location where this booking happened
+    location: Location;
+  
+    // 🔥 The final summary (single)
+    summary: Summary;
+  
+    // Timestamp when booking was stored
+    createdAt: string;
+
+    startTime: string;
+  }
+  
+
+  type SelectedItem = {
+    id: string;
+    price: number;
+    item: { id: string; name: string };
+  };
+
+
 
 @Injectable()
 export class ChatService implements OnModuleInit {
@@ -214,40 +288,99 @@ export class ChatService implements OnModuleInit {
     return ctx.threadId!;
   }
 
-
-
- private detectAssistant(userMessage: string, uuid: string) {
+  private async detectAssistant(userMessage: string, uuid: string): Promise<string | null> {
     const lower = userMessage.toLowerCase();
-
-    // load context only if we need to update it
-    // but we also want to set assistantType into context
-    const setAssistant = async (type: string) => {
-      let ctx :any= await this.loadUserContext(uuid);
-      ctx.assistantType = type;
-      ctx.sessionToken = ctx?.sessionToken ?? this.tokenGenerate(uuid);
-      await this.saveUserContext(uuid, ctx);
-    };
-
+    const ctx :any = await this.loadUserContext(uuid);
+  
+    // ---------- MEMBERSHIP ----------
     if (lower.includes('membership') || lower.includes('member') || lower.includes('package') || lower.includes('plan')) {
       this.conversationHistory = "membership";
-      setAssistant('membership').catch(() => {});
+  
+      ctx.assistantType = 'membership';
+  
+      // generate token only if none exists
+      if (!ctx.sessionToken) {
+        ctx.sessionToken = await this.generateNewSessionToken(uuid);
+      }
+  
+      await this.saveUserContext(uuid, ctx);
       return 'membership';
     }
-
+  
+    // ---------- GIFT ----------
     if (lower.includes('gift') || lower.includes('giftcard')) {
       this.conversationHistory = "gift";
-      setAssistant('gift').catch(() => {});
+  
+      ctx.assistantType = 'gift';
+  
+      if (!ctx.sessionToken) {
+        ctx.sessionToken = await this.generateNewSessionToken(uuid);
+      }
+  
+      await this.saveUserContext(uuid, ctx);
       return 'gift';
     }
-
-    if (lower.includes('book') || lower.includes('appointment') || lower.includes('service') || lower.includes('schedule')) {
+  
+    // ---------- BOOKING (🔥 CRITICAL) ----------
+    if (
+      lower.includes('book') ||
+      lower.includes('appointment') ||
+      lower.includes('service') ||
+      lower.includes('schedule')
+    ) {
       this.conversationHistory = "booking";
-      setAssistant('booking').catch(() => {});
+  
+      ctx.assistantType = 'booking';
+  
+      // 🔥 ALWAYS reset booking state
+      delete ctx.cartId;
+      delete ctx.totalAmount;
+      //delete ctx.clientEmail;
+      //delete ctx.awaitingClientDetails;
+  
+      // 🔥 ALWAYS create a NEW token for a NEW booking
+      ctx.sessionToken = await this.generateNewSessionToken(uuid);
+  
+      await this.saveUserContext(uuid, ctx);
       return 'booking';
     }
-
+  
     return null;
   }
+  
+
+//  private detectAssistant(userMessage: string, uuid: string) {
+//     const lower = userMessage.toLowerCase();
+
+//     // load context only if we need to update it
+//     // but we also want to set assistantType into context
+//     const setAssistant = async (type: string) => {
+//       let ctx :any= await this.loadUserContext(uuid);
+//       ctx.assistantType = type;
+//       ctx.sessionToken = ctx?.sessionToken ?? this.tokenGenerate(uuid);
+//       await this.saveUserContext(uuid, ctx);
+//     };
+
+//     if (lower.includes('membership') || lower.includes('member') || lower.includes('package') || lower.includes('plan')) {
+//       this.conversationHistory = "membership";
+//       setAssistant('membership').catch(() => {});
+//       return 'membership';
+//     }
+
+//     if (lower.includes('gift') || lower.includes('giftcard')) {
+//       this.conversationHistory = "gift";
+//       setAssistant('gift').catch(() => {});
+//       return 'gift';
+//     }
+
+//     if (lower.includes('book') || lower.includes('appointment') || lower.includes('service') || lower.includes('schedule')) {
+//       this.conversationHistory = "booking";
+//       setAssistant('booking').catch(() => {});
+//       return 'booking';
+//     }
+
+//     return null;
+//   }
   
 
   public async sendMessage(
@@ -258,12 +391,29 @@ export class ChatService implements OnModuleInit {
 
     let intent: any = "";
 
-    // ensure a thread for the user
-    const threadId = await this.ensureThreadForUser(uuid);
+    
+    
+    
+  // 🔑 LOAD CONTEXT FIRST (single source of truth)
+  let ctx = await this.loadUserContext(uuid);
 
-    intent = this.detectAssistant(userMessage, uuid);
 
-    console.log("intent", intent);
+  console.log("history contextss:",ctx.appointmentHistory);
+  
+  // 🛑 CANCEL ACTIVE RUNS ON CURRENT THREAD (BEFORE RESET)
+  if (ctx?.threadId) {
+    await this.cancelActiveRuns(ctx.threadId);
+  }
+
+  intent = await this.detectAssistant(userMessage, uuid);
+  console.log("intent", intent);
+
+
+    
+    
+    // intent = this.detectAssistant(userMessage, uuid);
+
+    // console.log("intent", intent);
 
     // init MCP if needed
     if (!this.mcpClient || this.moduleName !== this.conversationHistory) {
@@ -294,6 +444,12 @@ export class ChatService implements OnModuleInit {
 
     await this.checkAndResetThread(uuid);
 
+    ctx = await this.loadUserContext(uuid);
+
+    // ensure a thread for the user
+    const threadId = await this.ensureThreadForUser(uuid);
+
+
     if (!threadId) {
       return {
         reply: {
@@ -305,13 +461,16 @@ export class ChatService implements OnModuleInit {
 
     console.log("📨 User message:", userMessage);
 
+    // await this.cancelActiveRuns(threadId);
+
+
     await this.openai.beta.threads.messages.create(threadId, {
       role: "user",
       content: userMessage,
     });
 
     // increment message count on context
-    const ctx = await this.loadUserContext(uuid);
+    // const ctx = await this.loadUserContext(uuid);
     ctx.messageCount = (ctx.messageCount || 0) + 1;
     await this.saveUserContext(uuid, ctx);
 
@@ -422,6 +581,32 @@ export class ChatService implements OnModuleInit {
       }
     };
   }
+
+private async cancelActiveRuns(threadId?: string) {
+  if (!threadId) {
+    console.warn("⚠️ cancelActiveRuns skipped — threadId undefined");
+    return;
+  }
+
+  const runs = await this.openai.beta.threads.runs.list(threadId, {
+    limit: 5,
+  });
+
+  for (const run of runs.data) {
+    if (run.status === "in_progress" || run.status === "requires_action") {
+      console.log(
+        "🛑 Cancelling active run:",
+        run.id,
+        "on thread:",
+        threadId
+      );
+
+      // ✅ THIS IS THE CRITICAL LINE
+      await this.openai.beta.threads.runs.cancel(run.id,{thread_id:threadId});
+    }
+  }
+}
+
 
   private extractFrontendAction(text: string, uuid: string): any {
     // Example: assistant prints some tag like <PAY_BUTTON> or similar logic
@@ -1021,6 +1206,21 @@ if (toolCall.function?.arguments) {
     // Return fuzzy match only if it was at least 1 hit
     return highestScore > 0 ? bestMatch : null;
   }
+
+
+  
+
+
+  private async generateNewSessionToken(uuid: string): Promise<string> {
+    const token = crypto.randomUUID();
+  
+    const ctx = await this.loadUserContext(uuid);
+    ctx.sessionToken = token;
+  
+    await this.saveUserContext(uuid, ctx);
+    return token;
+  }
+  
   
   
   private async extractStateFromToolOutput(toolOutput: any, uuid :string) {
@@ -1268,8 +1468,11 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
     await this.saveUserContext(uuid, ctx);
   }
   
-  
+
+
+
   public async setPaymentToken(token: string, sessionId:string, uuid :string) {
+      
     const c = await this.loadUserContext(uuid);
     
     if (!c?.cartId) throw new Error('Cart not available');
@@ -1286,13 +1489,80 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
       arguments: { cartId: c.cartId } 
     });
 
-    // console.log("checkoutCart result",JSON.parse(checkoutResult.content[0].text?.checkoutCart));
 
-    await this.extractStateFromToolOutput(checkoutResult, uuid);
-    
-    
-    return checkoutResult;
-  }
+    console.log("checkoutCart result1",checkoutResult);
+
+    const raw = checkoutResult.content?.[0]?.text;
+
+    if (!raw) {
+      console.error("checkoutCart text is undefined");
+    } else {
+      const parsed = JSON.parse(raw);
+      const checkout = parsed.checkoutCart;
+      
+      console.log("checkoutCart result:", checkout);
+      
+      // ---- Extract values ----
+      
+      // multiple appointments possible
+      const checkoutAppointments = checkout.appointments.map(a => a.appointmentId);
+      
+      // multiple services/items
+      const selectedItems = checkout.cart.selectedItems;
+      
+      // single location
+      const location = checkout.cart.location;
+      const startTime=checkout.cart.startTime;
+      // single summary (NOT an array anymore)
+      const summary: Summary = {
+        discountAmount: checkout.cart.summary.discountAmount,
+        subtotal: checkout.cart.summary.subtotal,
+        taxAmount: checkout.cart.summary.taxAmount,
+        total: checkout.cart.summary.total,
+      };
+      
+      // ---- Load context ----
+      const ctx = await this.loadUserContext(uuid);
+      
+      // ensure booking exists
+      ctx.booking = ctx.booking ?? {};
+      
+      // ---- Assign into booking ----
+      ctx.booking.checkoutAppointments = checkoutAppointments;
+      ctx.booking.selectedItems = selectedItems;
+      ctx.booking.location = location;
+      ctx.booking.summary = summary;
+      ctx.booking.startTime = startTime;
+
+      const completed: CompletedBooking = {
+        cartId: ctx.cartId!,
+        checkoutAppointments,
+        selectedItems,
+        location,
+        summary,
+        createdAt: new Date().toISOString(),
+        startTime
+      };
+      
+      // ---- Save into appointmentHistory ----
+      ctx.appointmentHistory = ctx.appointmentHistory ?? [];
+      ctx.appointmentHistory.push(completed);
+      
+      // ---- Save updated context ----
+      await this.saveUserContext(uuid, ctx);
+      
+      console.log("Updated booking context:", ctx.booking);
+      console.log("history context:",  ctx.appointmentHistory);
+      
+      // continue flow
+      await this.extractStateFromToolOutput(checkoutResult, uuid);
+      
+      return checkoutResult;
+      
+      }
+
+
+}
 
   // public clearSession(sessionId = 'default') {
   //   delete this.sessionState[sessionId];
