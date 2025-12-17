@@ -412,6 +412,10 @@ const APPLY_PROMOTION_CODE = `mutation addCartOffer($input:AddCartOfferInput!){
           id
           lineTotal
           price
+          item {
+            id
+            name
+          }
           selectedPaymentMethod {
             id
             name
@@ -661,7 +665,7 @@ server.tool(
 );
 
 server.tool(
-  "addMemberhipToCart",
+  "addMembershipToCart",
   "Add a membership plan to an existing cart",
   {
     id: z.string().describe("existing cartId"),
@@ -676,7 +680,7 @@ server.tool(
         "itemId":itemId
       } });
 
-      console.error("addMemberhipToCart >> ",data);
+      console.error("addMembershipToCart >> ",data);
 
     // const locations = data?.locations?.edges ?? [];
     return { content: [{ type: "text", text: JSON.stringify(data) }] };

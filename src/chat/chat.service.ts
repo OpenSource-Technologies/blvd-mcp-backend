@@ -34,6 +34,9 @@ interface UserContext {
   // 🔥 Stores ALL completed bookings
   appointmentHistory?: CompletedBooking[];
 
+  // 🔥 Stores ALL completed membership
+  membershipHistory?: CompletedMembership[];
+
   // 🔥 Stores ONLY the current active booking being processed
   booking?: {
     cartId?: string;
@@ -54,7 +57,22 @@ interface UserContext {
   };
 
 
-  membership?: { membershipPlanId?: string; membershipCartId?: string; clientInfo?: { email?: string; phone?: string; name?: string; }; }; 
+  membership?: { 
+    // membershipPlanId?: string; 
+    // membershipCartId?: string; 
+    // clientInfo?: { email?: string; phone?: string; name?: string; }; 
+
+    cartId?: string;
+    serviceItemId?: string;
+    promotionOfferId?: string;
+    clientInfo?: { email?: string; phone?: string; name?: string };
+
+    checkoutAppointments?: string[];
+    selectedItems?: SelectedItem[];
+    location?: Location;
+    startTime?:string;
+    summary?: Summary;
+  }; 
   giftcard?: { amount?: number; clientInfo?: { email?: string; phone?: string; name?: string; }; giftcardCartId?: string; recipientEmail?: string; senderMessage?: string; }; flags?: { awaitingClientDetails?: boolean; }; }
 
 
@@ -76,6 +94,24 @@ interface UserContext {
   
     // 🔥 Multiple appointment IDs possible from one checkout
     checkoutAppointments: string[];
+  
+    // 🔥 All services included in that checkout
+    selectedItems: SelectedItem[];
+  
+    // 🔥 The location where this booking happened
+    location: Location;
+  
+    // 🔥 The final summary (single)
+    summary: Summary;
+  
+    // Timestamp when booking was stored
+    createdAt: string;
+
+    startTime: string;
+  }
+
+  interface CompletedMembership {
+    cartId: string;
   
     // 🔥 All services included in that checkout
     selectedItems: SelectedItem[];
@@ -874,7 +910,8 @@ private async cancelActiveRuns(threadId?: string) {
           })),
         };
 
-        case 'addMemberhipToCart':
+        case 'addMembershipToCart':
+          
           return {
             membership: (Array.isArray(rawResult) ? rawResult : []).map((item: any) => ({
               id: item.node.id,
@@ -1523,36 +1560,75 @@ if (toolOutput.addCartSelectedBookableItem?.cart?.selectedItems) {
       
       // ---- Load context ----
       const ctx = await this.loadUserContext(uuid);
-      
-      // ensure booking exists
-      ctx.booking = ctx.booking ?? {};
-      
-      // ---- Assign into booking ----
-      ctx.booking.checkoutAppointments = checkoutAppointments;
-      ctx.booking.selectedItems = selectedItems;
-      ctx.booking.location = location;
-      ctx.booking.summary = summary;
-      ctx.booking.startTime = startTime;
 
-      const completed: CompletedBooking = {
-        cartId: ctx.cartId!,
-        checkoutAppointments,
-        selectedItems,
-        location,
-        summary,
-        createdAt: new Date().toISOString(),
-        startTime
-      };
       
-      // ---- Save into appointmentHistory ----
-      ctx.appointmentHistory = ctx.appointmentHistory ?? [];
-      ctx.appointmentHistory.push(completed);
+      
+      if(this.conversationHistory == "booking"){
+
+          // ensure booking exists
+          ctx.booking = ctx.booking ?? {};
+          
+          // ---- Assign into booking ----
+          ctx.booking.checkoutAppointments = checkoutAppointments;
+          ctx.booking.selectedItems = selectedItems;
+          ctx.booking.location = location;
+          ctx.booking.summary = summary;
+          ctx.booking.startTime = startTime;
+
+
+          console.log("setpayment ctxxxx >>> ",ctx);
+          console.log("setPayment ctxxxx selectedItems  >> ",selectedItems)
+
+          const completed: CompletedBooking = {
+            cartId: ctx.cartId!,
+            checkoutAppointments,
+            selectedItems,
+            location,
+            summary,
+            createdAt: new Date().toISOString(),
+            startTime
+          };
+
+        // ---- Save into appointmentHistory ----
+        ctx.appointmentHistory = ctx.appointmentHistory ?? [];
+        ctx.appointmentHistory.push(completed);
+      }else
+      if(this.conversationHistory == "membership"){
+
+
+        // ensure booking exists
+        ctx.membership = ctx.booking ?? {};
+        
+        // ---- Assign into booking ----
+        ctx.membership.checkoutAppointments = checkoutAppointments;
+        ctx.membership.selectedItems = selectedItems;
+        ctx.membership.location = location;
+        ctx.membership.summary = summary;
+        ctx.membership.startTime = startTime;
+
+
+        console.log("setpayment ctxxxx >>> ",ctx);
+        console.log("setPayment ctxxxx selectedItems  >> ",selectedItems)
+
+        const completed: CompletedBooking = {
+          cartId: ctx.cartId!,
+          checkoutAppointments,
+          selectedItems,
+          location,
+          summary,
+          createdAt: new Date().toISOString(),
+          startTime
+        };
+        // ---- Save into membershipHistory ----
+        ctx.membershipHistory = ctx.membershipHistory ?? [];
+        ctx.membershipHistory.push(completed);
+      }
+
+      console.log("setpayment ctxxxx membershipHistory  >> ",ctx.membershipHistory);
+      
       
       // ---- Save updated context ----
       await this.saveUserContext(uuid, ctx);
-      
-      console.log("Updated booking context:", ctx.booking);
-      console.log("history context:",  ctx.appointmentHistory);
       
       // continue flow
       await this.extractStateFromToolOutput(checkoutResult, uuid);

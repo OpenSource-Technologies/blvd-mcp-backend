@@ -623,7 +623,7 @@ server.tool(
 
 server.tool(
   "resolveDateRange",
-  "Convert natural-language date into YYYY-MM-DD and return 15-day bookable range",
+  "Convert natural-language date into YYYY-MM-DD and return 7-day bookable range",
   {
     inputText: z.string().describe("User natural date input")
   },
@@ -773,7 +773,7 @@ server.tool(
     const lower = resolvedDate;
 
     const upperDate = new Date(resolved);
-    upperDate.setDate(upperDate.getDate() + 15);
+    upperDate.setDate(upperDate.getDate() + 7);
     const upper = toISO(upperDate);
 
     return {
@@ -792,7 +792,7 @@ server.tool(
 );
 
 
-server.tool("cartBookableDates", "First 15 bookable dates for the cart", {
+server.tool("cartBookableDates", "First 7 bookable dates for the cart", {
     cartId: z.string().describe("existing cart id"),
 }, async ({ cartId }) => {
     
