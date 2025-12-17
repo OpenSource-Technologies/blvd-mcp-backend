@@ -924,6 +924,12 @@ private async cancelActiveRuns(threadId?: string) {
 
 
       // /*********** giftcard start ***********/
+
+      case 'availableServicesGiftCard':
+        console.log("availableServicesGiftCard  rrrrr >> ",rawResult);
+            return {
+            giftcard: rawResult
+          };
       // case 'createGiftCardCart':
       //   console.log("createGiftCardCart rrrrrr >> ",rawResult);
       //     return {
@@ -1175,9 +1181,13 @@ if (toolCall.function?.arguments) {
         );
   
         // Poll again until the next stage
-        currentRun = await this.pollRunUntilComplete(threadId, updatedRun.id);
+
+        console.log(`✅ availableServicesGiftCard  rrrrr outtt >> ${currentRun.status}`);
+       // if(currentRun.status =='in_progress'){
+          currentRun = await this.pollRunUntilComplete(threadId, updatedRun.id);
+       // }
+        
   
-        // console.log(`✅ Status after submission: ${currentRun.status}`);
   
       } catch (error: any) {
         console.error('❌ Error submitting tool outputs:', error.message);
