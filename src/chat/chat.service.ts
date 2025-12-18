@@ -618,52 +618,86 @@ export class ChatService implements OnModuleInit {
     };
   }
 
+  async promptSuggestions(userContent: string): Promise<string[]> {
+    if (!userContent?.trim()) {
+      return [];
+    }
 
-  promptSummarize(userPrompt:string){
-    const response = this.openai.responses.create({
+    const response = await this.openai.responses.create({
       model: "gpt-4.1-mini",
       input: [
         {
           role: "system",
-          content: "Summarize the following prompt data and put possible value in placeholder"
+          content:
+            "Given the user's latest message, return ONLY a JSON array (3-5 items) of short follow-up prompts the user could tap next. Do not add prose or keys.",
         },
         {
           role: "user",
-          content: userPrompt
-        }
+          content: userContent,
+        },
       ],
     });
-  
-    console.log("response.output_text  >> ",response.output_text);
-    console.error("response.output_text  >> ",response.output_text);
-    return response.output_text;
+
+    // Extract the text output; responses API uses output_text for the combined string
+    const textOutput =
+      response.output_text ||
+      response.output?.[0]?.content?.[0]?.text ||
+      "";
+
+    let rawSuggestions: any[] = [];
+    if (textOutput) {
+      try {
+        const parsed = JSON.parse(textOutput);
+        if (Array.isArray(parsed)) {
+          rawSuggestions = parsed;
+        } else if (Array.isArray((parsed as any).suggestions)) {
+          rawSuggestions = (parsed as any).suggestions;
+        }
+      } catch (err) {
+        console.error("promptSuggestions JSON parse failed", err);
+      }
+    }
+
+    const unique = Array.from(
+      new Set(
+        (Array.isArray(rawSuggestions) ? rawSuggestions : [])
+          .filter((s: any) => typeof s === "string")
+          .map((s: string) => s.trim())
+          .filter(Boolean)
+      )
+    );
+
+    console.log("Response => ", response);
+
+    // Limit to 5 to avoid flooding the UI
+    return unique.slice(0, 5);
   }
 
 
-private async cancelActiveRuns(threadId?: string) {
-  if (!threadId) {
-    console.warn("⚠️ cancelActiveRuns skipped — threadId undefined");
-    return;
-  }
+  private async cancelActiveRuns(threadId?: string) {
+    if (!threadId) {
+      console.warn("⚠️ cancelActiveRuns skipped — threadId undefined");
+      return;
+    }
 
-  const runs = await this.openai.beta.threads.runs.list(threadId, {
-    limit: 5,
-  });
+    const runs = await this.openai.beta.threads.runs.list(threadId, {
+      limit: 5,
+    });
 
-  for (const run of runs.data) {
-    if (run.status === "in_progress" || run.status === "requires_action") {
-      console.log(
-        "🛑 Cancelling active run:",
-        run.id,
-        "on thread:",
-        threadId
-      );
+    for (const run of runs.data) {
+      if (run.status === "in_progress" || run.status === "requires_action") {
+        console.log(
+          "🛑 Cancelling active run:",
+          run.id,
+          "on thread:",
+          threadId
+        );
 
-      // ✅ THIS IS THE CRITICAL LINE
-      await this.openai.beta.threads.runs.cancel(run.id,{thread_id:threadId});
+        // ✅ THIS IS THE CRITICAL LINE
+        await this.openai.beta.threads.runs.cancel(run.id,{thread_id:threadId});
+      }
     }
   }
-}
 
 
   private extractFrontendAction(text: string, uuid: string): any {
