@@ -74,22 +74,10 @@ return {
     content
   }
 }}
-  
 
-
-@Post('prompt-summarize')
-  async promptSummarize(@Body('promptMsg') promptMsg: string) {
-    const response = await this.chatService.promptSummarize(promptMsg);
-    console.log("response innnn  >> ",response)
-    return response; // ✅ don’t wrap it again
-    let content = "";
-
-    // 6. Wrap in reply object
-    // return {
-    //   reply: {
-    //     role: "assistant",
-    //     content
-    //   }
-    // }}
+  @Post('prompt-suggestions')
+  async promptSuggestions(@Body('userContent') userContent: string) {
+    const suggestions = await this.chatService.promptSuggestions(userContent);
+    return suggestions;
   }
 }
