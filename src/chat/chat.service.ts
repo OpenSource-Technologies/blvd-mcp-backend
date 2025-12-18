@@ -618,6 +618,28 @@ export class ChatService implements OnModuleInit {
     };
   }
 
+
+  promptSummarize(userPrompt:string){
+    const response = this.openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        {
+          role: "system",
+          content: "Summarize the following prompt data and put possible value in placeholder"
+        },
+        {
+          role: "user",
+          content: userPrompt
+        }
+      ],
+    });
+  
+    console.log("response.output_text  >> ",response.output_text);
+    console.error("response.output_text  >> ",response.output_text);
+    return response.output_text;
+  }
+
+
 private async cancelActiveRuns(threadId?: string) {
   if (!threadId) {
     console.warn("⚠️ cancelActiveRuns skipped — threadId undefined");
